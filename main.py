@@ -73,6 +73,22 @@ def home():
     return {"status": "online"}
 
 
+def _supabase_key_role(key: str | None) -> str | None:
+    if not key or key.count(".") < 2:
+        return None
+    try:
+        import base64
+        import json
+
+        payload_b64 = key.split(".")[1]
+        payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("utf-8")))
+        role = payload.get("role")
+        return str(role) if role else None
+    except Exception:
+        return None
+
+
 @app.get("/health")
 def health():
     import re
@@ -98,16 +114,25 @@ def health():
         except Exception:
             supabase_host = None
 
+    key_role = _supabase_key_role(SUPABASE_KEY)
+    key_ok = key_role == "service_role"
+    healthy = supabase_url_ok and key_ok and not missing
+
     payload = {
         "supabase_url_ok": supabase_url_ok,
         "supabase_host": supabase_host,
         "supabase_url_preview": supabase_url_preview,
         "supabase_key_set": bool(SUPABASE_KEY),
+        "supabase_key_role": key_role,
+        "supabase_key_ok": key_ok,
+        "hint": None
+        if key_ok
+        else "Defina SUPABASE_KEY com a service_role (Project Settings → API), nao a anon/publishable.",
         "python": sys.version.split()[0],
     }
     if missing:
         return {"status": "degraded", "missing_env": missing, **payload}
-    return {"status": "ok" if supabase_url_ok else "degraded", **payload}
+    return {"status": "ok" if healthy else "degraded", **payload}
 
 
 @app.get("/health/db")

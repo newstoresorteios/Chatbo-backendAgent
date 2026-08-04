@@ -37,9 +37,18 @@ def login(credentials: LoginRequest):
         ) from exc
     except Exception as exc:
         logger.exception("Falha inesperada no login")
+        detail = f"Erro interno no login: {exc}"
+        text = str(exc).lower()
+        if "row-level security" in text or "42501" in text:
+            detail = (
+                "Erro de permissao no Supabase (RLS em refresh_tokens). "
+                "No Render, defina SUPABASE_KEY com a service_role "
+                "(Project Settings → API), nao a anon key. "
+                "Ou execute supabase/019_refresh_tokens_rls.sql no SQL Editor."
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro interno no login: {exc}",
+            detail=detail,
         ) from exc
 
 
