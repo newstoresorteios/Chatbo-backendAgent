@@ -16,7 +16,14 @@ ONBOARDING_STATUSES = {"pending", "in_progress", "complete"}
 ONBOARDING_PATCH_STATUSES = {"pending", "in_progress"}
 SALES_MODELS = {"b2b", "b2c", "mixed"}
 ONBOARDING_STEPS = ("empresa", "operacao", "catalogo", "canais", "persona", "teste", "ativacao")
-LEGACY_STEP_MAP = {"business": "empresa", "operation": "operacao", "catalog": "catalogo", "channels": "canais", "activation": "ativacao"}
+LEGACY_STEP_MAP = {
+    "business": "empresa",
+    "operation": "operacao",
+    "catalog": "catalogo",
+    "channels": "canais",
+    "activation": "ativacao",
+    "test": "teste",
+}
 
 
 class WorkspaceService:
@@ -171,7 +178,23 @@ class WorkspaceService:
         channel_configured = any(row.get("status") in {"configured", "active"} for row in channels)
         catalog = self._catalog()
         test_completed = bool(active_persona and self.repo.ultimo_teste_sucesso(workspace_id, str(active_persona.get("id"))))
-        return {"companyConfigured": self._company_configured(workspace, settings), "operationConfigured": self._operation_configured(settings), **catalog, "channelConfigured": channel_configured, "personaCreated": bool(personas), "personaActive": bool(active_persona), "testCompleted": test_completed, "readyForActivation": bool(self._company_configured(workspace, settings) and self._operation_configured(settings) and catalog["catalogAvailable"] and channel_configured and active_persona and test_completed)}
+        # Catálogo é informativo/opcional no onboarding — não bloqueia ativação.
+        return {
+            "companyConfigured": self._company_configured(workspace, settings),
+            "operationConfigured": self._operation_configured(settings),
+            **catalog,
+            "channelConfigured": channel_configured,
+            "personaCreated": bool(personas),
+            "personaActive": bool(active_persona),
+            "testCompleted": test_completed,
+            "readyForActivation": bool(
+                self._company_configured(workspace, settings)
+                and self._operation_configured(settings)
+                and channel_configured
+                and active_persona
+                and test_completed
+            ),
+        }
 
     def _onboarding_response(self, row: dict | None, workspace_id: str) -> dict:
         row = row or {}
@@ -183,7 +206,16 @@ class WorkspaceService:
         return {"status": row.get("status") or "pending", "currentStep": current, "completedSteps": completed, "requirements": requirements, "startedAt": row.get("started_at"), "completedAt": row.get("completed_at")}
 
     def _step_requirement(self, step: str, req: dict) -> bool:
-        return {"empresa": req["companyConfigured"], "operacao": req["operationConfigured"], "catalogo": req["catalogAvailable"], "canais": req["channelConfigured"], "persona": req["personaActive"], "teste": req["testCompleted"], "ativacao": req["readyForActivation"]}.get(step, False)
+        # Catálogo não é gate: o passo pode ser avançado sem produtos sincronizados.
+        return {
+            "empresa": req["companyConfigured"],
+            "operacao": req["operationConfigured"],
+            "catalogo": True,
+            "canais": req["channelConfigured"],
+            "persona": req["personaActive"],
+            "teste": req["testCompleted"],
+            "ativacao": req["readyForActivation"],
+        }.get(step, False)
 
     def obter_onboarding(self, usuario: dict) -> dict:
         context = self.get_current_workspace_context(usuario)
@@ -249,7 +281,17 @@ class WorkspaceService:
         context = self.get_current_workspace_context(usuario)
         self._require_workspace_admin(context)
         requirements = self._requirements(context["workspaceId"])
-        missing = [key for key in ("companyConfigured", "operationConfigured", "catalogAvailable", "channelConfigured", "personaActive", "testCompleted") if not requirements[key]]
+        missing = [
+            key
+            for key in (
+                "companyConfigured",
+                "operationConfigured",
+                "channelConfigured",
+                "personaActive",
+                "testCompleted",
+            )
+            if not requirements[key]
+        ]
         if missing:
             raise HTTPException(status_code=409, detail={"message": "Onboarding incompleto.", "missingRequirements": missing})
         self.repo.salvar_onboarding(context["workspaceId"], {"status": "complete", "current_step": "ativacao", "completed_steps": list(ONBOARDING_STEPS), "completed_at": datetime.utcnow().isoformat()})
