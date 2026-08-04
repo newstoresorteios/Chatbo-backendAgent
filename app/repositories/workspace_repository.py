@@ -142,6 +142,8 @@ class WorkspaceRepository:
             "current_step": current_step,
             "completed_steps": [],
         }
+        if status == "complete":
+            payload["completed_at"] = datetime.utcnow().isoformat()
         resposta = supabase.table("workspace_onboarding").insert(payload).execute()
         rows = resposta.data or []
         return rows[0] if rows else payload

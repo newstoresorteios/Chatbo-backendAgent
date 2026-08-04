@@ -15,7 +15,9 @@ WORKSPACE_VIEW_ROLES = {"owner", "admin", "supervisor"}
 ONBOARDING_STATUSES = {"pending", "in_progress", "complete"}
 ONBOARDING_PATCH_STATUSES = {"pending", "in_progress"}
 SALES_MODELS = {"b2b", "b2c", "mixed"}
-ONBOARDING_STEPS = ("empresa", "operacao", "catalogo", "canais", "persona", "teste", "ativacao")
+# Fluxo obrigatório. Persona/teste são opcionais e ficam em Configurações.
+ONBOARDING_STEPS = ("empresa", "operacao", "catalogo", "canais", "ativacao")
+LEGACY_OPTIONAL_STEPS = {"persona", "teste", "test"}
 LEGACY_STEP_MAP = {
     "business": "empresa",
     "operation": "operacao",
@@ -52,14 +54,29 @@ class WorkspaceService:
             raise HTTPException(status_code=404, detail="Workspace não encontrado")
         if workspace.get("status") != "active":
             raise HTTPException(status_code=403, detail="Workspace inativo")
-        onboarding = self.repo.obter_onboarding(str(workspace.get("id"))) or {}
         workspace_id = str(workspace.get("id"))
+        onboarding = self.repo.obter_onboarding(workspace_id) or {}
+        # Onboarding wizard desativado: libera o sistema sem fluxo obrigatório.
+        if onboarding and onboarding.get("status") != "complete":
+            try:
+                self.repo.salvar_onboarding(
+                    workspace_id,
+                    {
+                        "status": "complete",
+                        "current_step": "ativacao",
+                        "completed_steps": list(ONBOARDING_STEPS),
+                        "completed_at": datetime.utcnow().isoformat(),
+                    },
+                )
+            except Exception:
+                logger.exception("Falha ao marcar onboarding completo para workspace %s", workspace_id)
+            onboarding = {**onboarding, "status": "complete"}
         return {
             "workspaceId": workspace_id,
             "companyId": workspace_id,
             "workspaceName": workspace.get("name") or usuario.get("empresa") or "NITRUS",
             "workspaceRole": membership.get("role") or "member",
-            "onboardingStatus": onboarding.get("status") or "complete",
+            "onboardingStatus": (onboarding.get("status") if onboarding else None) or "complete",
             "accountType": account_type,
         }
 
@@ -69,7 +86,11 @@ class WorkspaceService:
         try:
             self.repo.criar_membership(workspace_id=workspace_id, user_id=user_id, role="owner")
             self.repo.criar_settings(workspace_id, {"currency": "BRL", "primary_contact": None})
-            self.repo.criar_onboarding(workspace_id, status="pending", current_step="empresa")
+            self.repo.criar_onboarding(
+                workspace_id,
+                status="complete",
+                current_step="ativacao",
+            )
             try:
                 from app.services.billing_service import billing_service
                 billing_service.criar_trial(workspace_id, user_id)
@@ -178,7 +199,7 @@ class WorkspaceService:
         channel_configured = any(row.get("status") in {"configured", "active"} for row in channels)
         catalog = self._catalog()
         test_completed = bool(active_persona and self.repo.ultimo_teste_sucesso(workspace_id, str(active_persona.get("id"))))
-        # Catálogo é informativo/opcional no onboarding — não bloqueia ativação.
+        # Catálogo, persona e teste são opcionais — não bloqueiam ativação.
         return {
             "companyConfigured": self._company_configured(workspace, settings),
             "operationConfigured": self._operation_configured(settings),
@@ -191,29 +212,44 @@ class WorkspaceService:
                 self._company_configured(workspace, settings)
                 and self._operation_configured(settings)
                 and channel_configured
-                and active_persona
-                and test_completed
             ),
         }
 
     def _onboarding_response(self, row: dict | None, workspace_id: str) -> dict:
         row = row or {}
-        completed = [LEGACY_STEP_MAP.get(step, step) for step in (row.get("completed_steps") or []) if step in ONBOARDING_STEPS or step in LEGACY_STEP_MAP]
+        completed = [
+            LEGACY_STEP_MAP.get(step, step)
+            for step in (row.get("completed_steps") or [])
+            if (step in ONBOARDING_STEPS or step in LEGACY_STEP_MAP)
+            and LEGACY_STEP_MAP.get(step, step) in ONBOARDING_STEPS
+        ]
         requirements = self._requirements(workspace_id)
         current = LEGACY_STEP_MAP.get(row.get("current_step"), row.get("current_step"))
+        if current in LEGACY_OPTIONAL_STEPS or current not in ONBOARDING_STEPS:
+            current = None
         if not current:
-            current = next((step for step in ONBOARDING_STEPS if not self._step_requirement(step, requirements)), "ativacao")
-        return {"status": row.get("status") or "pending", "currentStep": current, "completedSteps": completed, "requirements": requirements, "startedAt": row.get("started_at"), "completedAt": row.get("completed_at")}
+            current = next(
+                (step for step in ONBOARDING_STEPS if not self._step_requirement(step, requirements)),
+                "ativacao",
+            )
+        return {
+            "status": row.get("status") or "pending",
+            "currentStep": current,
+            "completedSteps": completed,
+            "requirements": requirements,
+            "startedAt": row.get("started_at"),
+            "completedAt": row.get("completed_at"),
+        }
 
     def _step_requirement(self, step: str, req: dict) -> bool:
-        # Catálogo não é gate: o passo pode ser avançado sem produtos sincronizados.
+        # Catálogo/persona/teste não são gate do onboarding.
         return {
             "empresa": req["companyConfigured"],
             "operacao": req["operationConfigured"],
             "catalogo": True,
             "canais": req["channelConfigured"],
-            "persona": req["personaActive"],
-            "teste": req["testCompleted"],
+            "persona": True,
+            "teste": True,
             "ativacao": req["readyForActivation"],
         }.get(step, False)
 
@@ -287,14 +323,23 @@ class WorkspaceService:
                 "companyConfigured",
                 "operationConfigured",
                 "channelConfigured",
-                "personaActive",
-                "testCompleted",
             )
             if not requirements[key]
         ]
         if missing:
-            raise HTTPException(status_code=409, detail={"message": "Onboarding incompleto.", "missingRequirements": missing})
-        self.repo.salvar_onboarding(context["workspaceId"], {"status": "complete", "current_step": "ativacao", "completed_steps": list(ONBOARDING_STEPS), "completed_at": datetime.utcnow().isoformat()})
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Onboarding incompleto.", "missingRequirements": missing},
+            )
+        self.repo.salvar_onboarding(
+            context["workspaceId"],
+            {
+                "status": "complete",
+                "current_step": "ativacao",
+                "completed_steps": list(ONBOARDING_STEPS),
+                "completed_at": datetime.utcnow().isoformat(),
+            },
+        )
         return self.obter_onboarding(usuario)
 
     def concluir_onboarding(self, usuario: dict) -> dict:
