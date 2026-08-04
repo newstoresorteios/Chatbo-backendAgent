@@ -1,4 +1,5 @@
 import os
+import sys
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,7 +103,7 @@ def health():
         "supabase_host": supabase_host,
         "supabase_url_preview": supabase_url_preview,
         "supabase_key_set": bool(SUPABASE_KEY),
-        "python": os.sys.version.split()[0],
+        "python": sys.version.split()[0],
     }
     if missing:
         return {"status": "degraded", "missing_env": missing, **payload}
