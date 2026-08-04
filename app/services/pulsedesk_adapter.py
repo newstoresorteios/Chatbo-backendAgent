@@ -1,9 +1,16 @@
 from datetime import datetime, timedelta
 import math
 
+from app.core.workspace_scope import apply_workspace_filter
 from app.services.supabase_service import supabase
 from app.repositories.dashboard_repository import DashboardRepository
 from app.services.dashboard_service import DashboardService
+
+
+def _require_workspace_id(workspace_id: str | None) -> str:
+    if not workspace_id:
+        raise ValueError("workspace_id é obrigatório para isolamento multi-empresa")
+    return str(workspace_id)
 
 
 def _paginate(items: list, page: int, page_size: int) -> dict:
@@ -82,8 +89,12 @@ def _map_pedido(row: dict, clientes_por_id: dict | None = None) -> dict:
     }
 
 
-def _clientes_index() -> dict:
-    resposta = supabase.table("clientes").select("mercos_id,nome,razao_social").execute()
+def _clientes_index(workspace_id: str) -> dict:
+    query = apply_workspace_filter(
+        supabase.table("clientes").select("mercos_id,nome,razao_social"),
+        workspace_id,
+    )
+    resposta = query.execute()
     return {
         str(row.get("mercos_id")): row
         for row in (resposta.data or [])
@@ -91,8 +102,15 @@ def _clientes_index() -> dict:
     }
 
 
-def listar_clientes(page: int = 1, page_size: int = 10, search: str = "") -> dict:
-    resposta = supabase.table("clientes").select("*").execute()
+def listar_clientes(
+    page: int = 1,
+    page_size: int = 10,
+    search: str = "",
+    workspace_id: str | None = None,
+) -> dict:
+    workspace_id = _require_workspace_id(workspace_id)
+    query = apply_workspace_filter(supabase.table("clientes").select("*"), workspace_id)
+    resposta = query.execute()
     rows = resposta.data or []
 
     if search:
@@ -110,11 +128,14 @@ def listar_clientes(page: int = 1, page_size: int = 10, search: str = "") -> dic
     return _paginate([_map_cliente(row) for row in rows], page, page_size)
 
 
-def obter_cliente(cliente_id: str) -> dict | None:
-    resposta = supabase.table("clientes").select("*").eq("mercos_id", cliente_id).execute()
+def obter_cliente(cliente_id: str, workspace_id: str | None = None) -> dict | None:
+    workspace_id = _require_workspace_id(workspace_id)
+    query = apply_workspace_filter(supabase.table("clientes").select("*"), workspace_id)
+    resposta = query.eq("mercos_id", cliente_id).execute()
     rows = resposta.data or []
     if not rows:
-        resposta = supabase.table("clientes").select("*").eq("id", cliente_id).execute()
+        query = apply_workspace_filter(supabase.table("clientes").select("*"), workspace_id)
+        resposta = query.eq("id", cliente_id).execute()
         rows = resposta.data or []
     if not rows:
         return None
@@ -123,10 +144,12 @@ def obter_cliente(cliente_id: str) -> dict | None:
     mercos_id = str(rows[0].get("mercos_id") or cliente_id)
 
     try:
+        pedidos_query = apply_workspace_filter(
+            supabase.table("pedidos").select("*"),
+            workspace_id,
+        )
         pedidos_resp = (
-            supabase
-            .table("pedidos")
-            .select("*")
+            pedidos_query
             .eq("cliente_mercos_id", mercos_id)
             .order("data_pedido", desc=True)
             .execute()
@@ -146,8 +169,16 @@ def obter_cliente(cliente_id: str) -> dict | None:
     return cliente
 
 
-def listar_produtos(page: int = 1, page_size: int = 10, search: str = "", category: str | None = None) -> dict:
-    resposta = supabase.table("produtos").select("*").execute()
+def listar_produtos(
+    page: int = 1,
+    page_size: int = 10,
+    search: str = "",
+    category: str | None = None,
+    workspace_id: str | None = None,
+) -> dict:
+    workspace_id = _require_workspace_id(workspace_id)
+    query = apply_workspace_filter(supabase.table("produtos").select("*"), workspace_id)
+    resposta = query.execute()
     rows = resposta.data or []
 
     if search:
@@ -164,14 +195,22 @@ def listar_produtos(page: int = 1, page_size: int = 10, search: str = "", catego
     return _paginate([_map_produto(row) for row in rows], page, page_size)
 
 
-def listar_pedidos(page: int = 1, page_size: int = 10, search: str = "", status: str | None = None) -> dict:
+def listar_pedidos(
+    page: int = 1,
+    page_size: int = 10,
+    search: str = "",
+    status: str | None = None,
+    workspace_id: str | None = None,
+) -> dict:
+    workspace_id = _require_workspace_id(workspace_id)
     try:
-        resposta = supabase.table("pedidos").select("*").execute()
+        query = apply_workspace_filter(supabase.table("pedidos").select("*"), workspace_id)
+        resposta = query.execute()
         rows = resposta.data or []
     except Exception:
         rows = []
 
-    clientes = _clientes_index()
+    clientes = _clientes_index(workspace_id)
     mapped = [_map_pedido(row, clientes) for row in rows]
 
     if search:
@@ -188,22 +227,23 @@ def listar_pedidos(page: int = 1, page_size: int = 10, search: str = "", status:
     return _paginate(mapped, page, page_size)
 
 
-def dashboard_data() -> dict:
-    return DashboardService().montar()
+def dashboard_data(workspace_id: str | None = None) -> dict:
+    return DashboardService().montar(workspace_id=_require_workspace_id(workspace_id))
 
 
-def mercos_status() -> dict:
+def mercos_status(workspace_id: str | None = None) -> dict:
     from app.repositories.mercos_sync_repository import MercosSyncRepository
     from app.services.mercos_service import mercos_configurado, mercos_info
     from app.services.pedido_service import PedidoService
 
+    workspace_id = _require_workspace_id(workspace_id)
     repo = DashboardRepository()
     sync_repo = MercosSyncRepository()
     pedido_service = PedidoService()
     info = mercos_info()
 
     last_sync = sync_repo.ultima_sincronizacao("orders") or sync_repo.ultima_sincronizacao("all")
-    resumo = pedido_service.resumo_situacoes()
+    resumo = pedido_service.resumo_situacoes(workspace_id=workspace_id)
 
     return {
         "connected": mercos_configurado(),
@@ -212,9 +252,9 @@ def mercos_status() -> dict:
         "isSandbox": info["isSandbox"],
         "baseUrlHost": info["baseUrlHost"],
         "lastSync": last_sync or datetime.utcnow().isoformat(),
-        "syncedProducts": repo.contar_produtos() or 0,
-        "syncedCustomers": repo.contar_clientes() or 0,
-        "syncedOrders": repo.contar_pedidos() or 0,
+        "syncedProducts": repo.contar_produtos(workspace_id) or 0,
+        "syncedCustomers": repo.contar_clientes(workspace_id) or 0,
+        "syncedOrders": repo.contar_pedidos(workspace_id) or 0,
         "orderStatusBreakdown": resumo.get("breakdown") or [],
         "allOrdersProcessing": resumo.get("allOrdersProcessing", False),
         "retainedRevenue": resumo.get("retainedRevenue", 0),

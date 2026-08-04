@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app.core.auth import verificar_token
 from app.core.permissions import requer_permissao
+from app.core.workspace_scope import obter_company_context
 from app.services.platform_service import platform_service
 
 router = APIRouter()
@@ -88,10 +89,14 @@ def mover_funil(body: MoveDealRequest, _: dict = Depends(requer_permissao("manag
 
 
 @router.post("/funil/sincronizar")
-def sincronizar_funil(_: dict = Depends(requer_permissao("managePlatform"))):
+def sincronizar_funil(
+    _: dict = Depends(requer_permissao("managePlatform")),
+    context: dict = Depends(obter_company_context),
+):
+    from app.core.workspace_scope import workspace_id_from_context
     from app.services.funil_sync_service import funil_sync_service
 
-    return funil_sync_service.sincronizar()
+    return funil_sync_service.sincronizar(workspace_id=workspace_id_from_context(context))
 
 
 @router.get("/campanhas")

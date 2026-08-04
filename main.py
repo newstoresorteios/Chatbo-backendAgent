@@ -23,6 +23,7 @@ from app.routes.workspace import router as workspace_router
 from app.routes.personas import router as personas_router
 from app.routes.billing import router as billing_router
 from app.routes.internal import router as internal_router
+from app.routes.agents import router as agents_router
 
 validar_jwt_secret()
 
@@ -55,6 +56,7 @@ api.include_router(workspace_router, tags=["Workspace"])
 api.include_router(personas_router, tags=["Personas"])
 api.include_router(billing_router, tags=["Billing"])
 api.include_router(internal_router, tags=["Internal"])
+api.include_router(agents_router, tags=["Agents"])
 api.include_router(mercos_router, prefix="/mercos", tags=["Mercos"])
 api.include_router(database_router, prefix="/database", tags=["Database"])
 api.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard"])

@@ -10,7 +10,7 @@ class ClienteService:
         self.repository = ClienteRepository()
         self.sync_logs = MercosSyncRepository()
 
-    def sincronizar(self, *, incremental: bool = True):
+    def sincronizar(self, *, incremental: bool = True, workspace_id: str | None = None):
         alterado_apos = None
         if incremental:
             alterado_apos = self.sync_logs.ultima_sincronizacao("customers")
@@ -58,7 +58,7 @@ class ClienteService:
                 "cep": cliente.get("cep")
             }
 
-            self.repository.salvar(dados)
+            self.repository.salvar(dados, workspace_id=workspace_id)
             quantidade += 1
 
         cursor = MercosService.max_ultima_alteracao(clientes)

@@ -15,7 +15,7 @@ class ProdutoService:
         self.repository = ProdutoRepository()
         self.sync_logs = MercosSyncRepository()
 
-    def sincronizar(self, *, incremental: bool = True):
+    def sincronizar(self, *, incremental: bool = True, workspace_id: str | None = None):
 
         alterado_apos = None
         if incremental:
@@ -41,7 +41,7 @@ class ProdutoService:
                 "ativo": produto.get("ativo"),
                 "ultima_alteracao": produto.get("ultima_alteracao"),
             }
-            self.repository.salvar(dados)
+            self.repository.salvar(dados, workspace_id=workspace_id)
             quantidade += 1
 
         cursor = MercosService.max_ultima_alteracao(produtos if isinstance(produtos, list) else [])

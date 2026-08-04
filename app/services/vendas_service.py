@@ -43,9 +43,9 @@ class VendasService:
         self.conversas = ConversaRepository()
         self.platform = PlatformRepository()
 
-    def _load_pedidos(self) -> list[dict]:
+    def _load_pedidos(self, workspace_id: str | None = None) -> list[dict]:
         try:
-            resp = listar_pedidos(page=1, page_size=500)
+            resp = listar_pedidos(page=1, page_size=500, workspace_id=workspace_id)
             return resp.get("data") or []
         except Exception:
             return []
@@ -198,15 +198,15 @@ class VendasService:
             "vendasPorDia": [],
         }
 
-    def metricas(self) -> dict:
+    def metricas(self, workspace_id: str | None = None) -> dict:
         try:
-            return self._calcular_metricas()
+            return self._calcular_metricas(workspace_id=workspace_id)
         except Exception as exc:
             logger.exception("Erro ao calcular métricas de venda: %s", exc)
             return self._metricas_vazias()
 
-    def _calcular_metricas(self) -> dict:
-        pedidos = self._load_pedidos()
+    def _calcular_metricas(self, workspace_id: str | None = None) -> dict:
+        pedidos = self._load_pedidos(workspace_id=workspace_id)
         funil_estagios = self._load_funil()
 
         by_status: dict[str, list[dict]] = defaultdict(list)

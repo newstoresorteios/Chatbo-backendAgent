@@ -5,6 +5,7 @@ from app.schemas.persona_runtime import ActivePersonaRuntime
 from app.schemas.catalog import CatalogPage
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.workspace_repository import WorkspaceRepository
+from app.services.agent_registry_service import agent_registry_service
 from app.services.persona_runtime_service import persona_runtime_service
 
 
@@ -20,6 +21,24 @@ workspace_repository = WorkspaceRepository()
 )
 def obter_persona_ativa(workspace_id: str) -> ActivePersonaRuntime:
     return persona_runtime_service.require_active_runtime(workspace_id)
+
+
+@router.get(
+    "/internal/workspaces/{workspace_id}/agent",
+    dependencies=[Depends(require_nitrus_internal_token)],
+)
+def obter_agente_workspace(workspace_id: str) -> dict:
+    """Contrato para runtimes NSAgent / AgentIA: companyId + agentType + config."""
+    return agent_registry_service.obter_runtime_interno(workspace_id)
+
+
+@router.get(
+    "/internal/companies/{company_id}/agent",
+    dependencies=[Depends(require_nitrus_internal_token)],
+)
+def obter_agente_empresa(company_id: str) -> dict:
+    """Alias: company_id == workspace_id."""
+    return agent_registry_service.obter_runtime_interno(company_id)
 
 
 @router.get(

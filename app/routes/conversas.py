@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.auth import obter_token_payload, verificar_token
+from app.core.auth import obter_token_payload
+from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.repositories.usuario_repository import UsuarioRepository
 from app.services.conversas_service import ConversasService
 
@@ -36,25 +37,34 @@ def _actor_name(payload: dict) -> str:
 
 
 @router.get("/conversas")
-def get_conversas(autorizado=Depends(verificar_token)):
-    return conversas_service.listar_conversas()
+def get_conversas(context: dict = Depends(obter_company_context)):
+    return conversas_service.listar_conversas(
+        workspace_id=workspace_id_from_context(context),
+    )
 
 
 @router.get("/conversas/{conversation_id}/mensagens")
-def get_mensagens(conversation_id: str, autorizado=Depends(verificar_token)):
-    return conversas_service.listar_mensagens(conversation_id)
+def get_mensagens(
+    conversation_id: str,
+    context: dict = Depends(obter_company_context),
+):
+    return conversas_service.listar_mensagens(
+        conversation_id,
+        workspace_id=workspace_id_from_context(context),
+    )
 
 
 @router.post("/conversas/{conversation_id}/mensagens")
 def send_mensagem(
     conversation_id: str,
     body: SendMessageRequest,
-    autorizado=Depends(verificar_token),
+    context: dict = Depends(obter_company_context),
 ):
     return conversas_service.enviar_mensagem(
         conversation_id,
         body.content,
         body.sender,
+        workspace_id=workspace_id_from_context(context),
     )
 
 
@@ -63,11 +73,13 @@ def transferir_conversa(
     conversation_id: str,
     body: TransferRequest,
     payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
 ):
     return conversas_service.transferir(
         conversation_id,
         body.assigneeId,
         _actor_name(payload),
+        workspace_id=workspace_id_from_context(context),
     )
 
 
@@ -75,11 +87,13 @@ def transferir_conversa(
 def assumir_conversa(
     conversation_id: str,
     payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
 ):
     return conversas_service.assumir(
         conversation_id,
         payload["sub"],
         _actor_name(payload),
+        workspace_id=workspace_id_from_context(context),
     )
 
 
@@ -88,17 +102,28 @@ def encerrar_conversa(
     conversation_id: str,
     body: CloseRequest | None = None,
     payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
 ):
     note = body.note if body else None
-    return conversas_service.encerrar(conversation_id, _actor_name(payload), note)
+    return conversas_service.encerrar(
+        conversation_id,
+        _actor_name(payload),
+        note,
+        workspace_id=workspace_id_from_context(context),
+    )
 
 
 @router.patch("/conversas/{conversation_id}/reativar")
 def reativar_conversa(
     conversation_id: str,
     payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
 ):
-    return conversas_service.reativar(conversation_id, _actor_name(payload))
+    return conversas_service.reativar(
+        conversation_id,
+        _actor_name(payload),
+        workspace_id=workspace_id_from_context(context),
+    )
 
 
 @router.post("/conversas/{conversation_id}/reserva")
@@ -106,6 +131,7 @@ def reservar_produto(
     conversation_id: str,
     body: ReserveProductRequest,
     payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
 ):
     return conversas_service.reservar_produto(
         conversation_id,
@@ -113,4 +139,5 @@ def reservar_produto(
         body.productName or body.productId,
         _actor_name(payload),
         body.quantity,
+        workspace_id=workspace_id_from_context(context),
     )

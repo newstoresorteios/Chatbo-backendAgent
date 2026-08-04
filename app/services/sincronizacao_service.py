@@ -10,10 +10,10 @@ class SincronizacaoService:
         self.produto_service = ProdutoService()
         self.pedido_service = PedidoService()
 
-    def sincronizar_tudo(self):
-        clientes = self.cliente_service.sincronizar()
-        produtos = self.produto_service.sincronizar()
-        pedidos = self.pedido_service.sincronizar()
+    def sincronizar_tudo(self, workspace_id: str | None = None):
+        clientes = self.cliente_service.sincronizar(workspace_id=workspace_id)
+        produtos = self.produto_service.sincronizar(workspace_id=workspace_id)
+        pedidos = self.pedido_service.sincronizar(workspace_id=workspace_id)
 
         return {
             "clientes": clientes,

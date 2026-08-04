@@ -23,9 +23,9 @@ class AgentService:
             return f"OpenAI {OPENAI_MODEL}{suffix}"
         return "Modo local (regex + dados Supabase)"
 
-    def status(self) -> dict:
+    def status(self, workspace_id: str | None = None) -> dict:
         try:
-            total = len(self.conversas.listar_conversas())
+            total = len(self.conversas.listar_conversas(workspace_id=workspace_id))
         except Exception:
             total = 0
         gpt = openai_configured()
@@ -61,16 +61,28 @@ class AgentService:
         customer_id: str | None = None,
         history: list[dict] | None = None,
         user_message: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
-        return self.context_builder.build(conversation_id, customer_id, history, user_message)
+        return self.context_builder.build(
+            conversation_id,
+            customer_id,
+            history,
+            user_message,
+            workspace_id=workspace_id,
+        )
 
-    def _minimal_context(self, message: str) -> dict:
+    def _minimal_context(self, message: str, workspace_id: str | None = None) -> dict:
         products: list[dict] = []
         try:
             from app.services.pulsedesk_adapter import listar_produtos
-            products = listar_produtos(page=1, page_size=40).get("data") or []
+            products = listar_produtos(
+                page=1,
+                page_size=40,
+                workspace_id=workspace_id,
+            ).get("data") or []
         except Exception:
             products = []
+        self.context_builder._workspace_id = workspace_id
         return {
             "userMessage": message,
             "salesMetrics": self.context_builder._load_sales_metrics(),
@@ -92,15 +104,22 @@ class AgentService:
         customer_id: str | None = None,
         mode: str = "copilot",
         history: list[dict] | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
         mode = mode or "copilot"
         conv_id = conversation_id or f"conv-{uuid.uuid4().hex[:8]}"
 
         try:
-            ctx = self.context_builder.build(conversation_id, customer_id, history, message)
+            ctx = self.context_builder.build(
+                conversation_id,
+                customer_id,
+                history,
+                message,
+                workspace_id=workspace_id,
+            )
         except Exception as exc:
             logger.exception("Erro ao montar contexto do Copiloto: %s", exc)
-            ctx = self._minimal_context(message)
+            ctx = self._minimal_context(message, workspace_id=workspace_id)
 
         if openai_configured():
             try:
@@ -151,14 +170,20 @@ class AgentService:
         self,
         conversation_id: str,
         customer_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
         try:
-            ctx = self.context_builder.build(conversation_id, customer_id)
+            ctx = self.context_builder.build(
+                conversation_id,
+                customer_id,
+                workspace_id=workspace_id,
+            )
             if ctx.get("lastCustomerMessage"):
                 ctx = self.context_builder.build(
                     conversation_id,
                     customer_id,
                     user_message=ctx.get("lastCustomerMessage"),
+                    workspace_id=workspace_id,
                 )
             system_prompt = self.context_builder.to_prompt(ctx)
 

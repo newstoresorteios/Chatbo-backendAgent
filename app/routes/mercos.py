@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.core.auth import verificar_token
 from app.core.permissions import requer_permissao
+from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.repositories.mercos_sync_repository import MercosSyncRepository
 from app.schemas.mercos import (
     MercosClienteCreate,
@@ -44,11 +45,11 @@ def _registrar_sync(tipo: str, mensagem: str, quantidade: int = 0) -> None:
     sync_logs.registrar(tipo=tipo, mensagem=mensagem, quantidade=quantidade)
 
 
-def _sincronizar_funil_apos_pedidos() -> str:
+def _sincronizar_funil_apos_pedidos(workspace_id: str | None = None) -> str:
     from app.services.funil_sync_service import funil_sync_service
 
     try:
-        resultado = funil_sync_service.sincronizar()
+        resultado = funil_sync_service.sincronizar(workspace_id=workspace_id)
         mensagem = resultado.get("message") or "Funil sincronizado."
         sync_logs.registrar(
             tipo="funil",
@@ -85,8 +86,11 @@ def _payload(model: BaseModel) -> dict:
 
 
 @router.get("/status")
-def get_mercos_status(autorizado=Depends(verificar_token)):
-    return mercos_status()
+def get_mercos_status(
+    autorizado=Depends(verificar_token),
+    context: dict = Depends(obter_company_context),
+):
+    return mercos_status(workspace_id=workspace_id_from_context(context))
 
 
 @router.get("/logs")
@@ -130,8 +134,10 @@ def testar_conexao_mercos(autorizado=Depends(verificar_token)):
 def sincronizar_mercos(
     body: MercosSyncRequest,
     _: dict = _PERM_ESCRITA,
+    context: dict = Depends(obter_company_context),
 ):
     tipo = body.type
+    workspace_id = workspace_id_from_context(context)
 
     try:
         _exigir_confirmacao_producao(body)
@@ -139,35 +145,35 @@ def sincronizar_mercos(
         prefix = f"[{ambiente}] "
 
         if tipo == "customers":
-            resultado = cliente_service.sincronizar()
+            resultado = cliente_service.sincronizar(workspace_id=workspace_id)
             qtd = resultado.get("clientes_sincronizados", 0)
             msg = f"{prefix}Clientes sincronizados: {qtd}"
             _registrar_sync("customers", msg, qtd)
             return {"success": True, "message": msg}
 
         if tipo == "products":
-            resultado = produto_service.sincronizar(incremental=False)
+            resultado = produto_service.sincronizar(incremental=False, workspace_id=workspace_id)
             qtd = resultado.get("produtos_sincronizados", 0)
             msg = f"{prefix}Produtos sincronizados: {qtd} (nenhum apagado)"
             _registrar_sync("products", msg, qtd)
             return {"success": True, "message": msg}
 
         if tipo == "orders":
-            resultado = pedido_service.sincronizar()
+            resultado = pedido_service.sincronizar(workspace_id=workspace_id)
             qtd = resultado.get("pedidos_sincronizados", 0)
             msg = resultado.get("mensagem") or f"{prefix}Pedidos sincronizados: {qtd}"
-            funil_msg = _sincronizar_funil_apos_pedidos()
+            funil_msg = _sincronizar_funil_apos_pedidos(workspace_id)
             return {
                 "success": True,
                 "message": f"{msg} {funil_msg}",
                 "resumo": resultado.get("resumo"),
             }
 
-        c = cliente_service.sincronizar()
+        c = cliente_service.sincronizar(workspace_id=workspace_id)
         time.sleep(6)
-        p = produto_service.sincronizar(incremental=False)
+        p = produto_service.sincronizar(incremental=False, workspace_id=workspace_id)
         time.sleep(6)
-        o = pedido_service.sincronizar(incremental=False)
+        o = pedido_service.sincronizar(incremental=False, workspace_id=workspace_id)
         msg = (
             f"{prefix}Sincronização concluída — "
             f"clientes: {c.get('clientes_sincronizados', 0)}, "
@@ -179,7 +185,7 @@ def sincronizar_mercos(
             msg,
             (c.get("clientes_sincronizados", 0) + p.get("produtos_sincronizados", 0) + o.get("pedidos_sincronizados", 0)),
         )
-        funil_msg = _sincronizar_funil_apos_pedidos()
+        funil_msg = _sincronizar_funil_apos_pedidos(workspace_id)
         return {"success": True, "message": f"{msg}. {funil_msg}", "resumo": o.get("resumo")}
     except HTTPException:
         raise
@@ -216,8 +222,11 @@ def alterar_cliente(cliente_id: int, dados: MercosClienteCreate, _: dict = _PERM
 
 
 @router.post("/clientes/sincronizar")
-def sincronizar_clientes(_: dict = _PERM_ESCRITA):
-    return cliente_service.sincronizar()
+def sincronizar_clientes(
+    _: dict = _PERM_ESCRITA,
+    context: dict = Depends(obter_company_context),
+):
+    return cliente_service.sincronizar(workspace_id=workspace_id_from_context(context))
 
 
 # --- Produtos ---
@@ -239,8 +248,11 @@ def criar_produto(dados: MercosProdutoCreate, _: dict = _PERM_ESCRITA):
 
 
 @router.post("/produtos/sincronizar")
-def sincronizar_produtos(_: dict = _PERM_ESCRITA):
-    return produto_service.sincronizar()
+def sincronizar_produtos(
+    _: dict = _PERM_ESCRITA,
+    context: dict = Depends(obter_company_context),
+):
+    return produto_service.sincronizar(workspace_id=workspace_id_from_context(context))
 
 
 # --- Pedidos ---

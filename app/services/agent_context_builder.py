@@ -41,14 +41,16 @@ class AgentContextBuilder:
         customer_id: str | None = None,
         history: list[dict] | None = None,
         user_message: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
+        self._workspace_id = workspace_id
         conversation = None
         conversation_messages: list[dict] = []
         session_messages: list[dict] = []
         all_conversations: list[dict] = []
 
         try:
-            all_conversations = self.conversas.listar_conversas()
+            all_conversations = self.conversas.listar_conversas(workspace_id=self._workspace_id)
         except Exception:
             all_conversations = []
 
@@ -57,7 +59,7 @@ class AgentContextBuilder:
             if conversation:
                 customer_id = customer_id or conversation.get("customerId")
                 try:
-                    conversation_messages = self.conversas.listar_mensagens(conversation_id)
+                    conversation_messages = self.conversas.listar_mensagens(conversation_id, workspace_id=self._workspace_id)
                 except Exception:
                     conversation_messages = []
 
@@ -89,7 +91,7 @@ class AgentContextBuilder:
         orders: list[dict] = []
         if customer_id:
             try:
-                customer = obter_cliente(str(customer_id))
+                customer = obter_cliente(str(customer_id), workspace_id=self._workspace_id)
                 if customer:
                     customer_detail = dict(customer)
                     orders = list(customer.get("orders") or [])
@@ -159,7 +161,7 @@ class AgentContextBuilder:
         seen: set[str] = set()
         for term in search_terms:
             try:
-                resp = listar_pedidos(page=1, page_size=200, search=term)
+                resp = listar_pedidos(page=1, page_size=200, search=term, workspace_id=self._workspace_id)
                 for order in resp.get("data") or []:
                     if str(order.get("customerId")) != str(customer_id):
                         continue
@@ -184,7 +186,7 @@ class AgentContextBuilder:
         words = [w for w in re.findall(r"[a-záàâãéêíóôõúç]{4,}", norm) if w not in _STOP_WORDS]
         for word in words[:3]:
             try:
-                result = listar_clientes(page=1, page_size=5, search=word)
+                result = listar_clientes(page=1, page_size=5, search=word, workspace_id=self._workspace_id)
                 items = result.get("data") or []
                 if items:
                     return items[0].get("id")
@@ -198,7 +200,7 @@ class AgentContextBuilder:
 
         for term in terms[:4]:
             try:
-                resp = listar_produtos(page=1, page_size=15, search=term)
+                resp = listar_produtos(page=1, page_size=15, search=term, workspace_id=self._workspace_id)
                 for p in resp.get("data") or []:
                     found[str(p.get("id"))] = p
             except Exception:
@@ -206,7 +208,7 @@ class AgentContextBuilder:
 
         if len(found) < 20:
             try:
-                resp = listar_produtos(page=1, page_size=40)
+                resp = listar_produtos(page=1, page_size=40, workspace_id=self._workspace_id)
                 for p in resp.get("data") or []:
                     found[str(p.get("id"))] = p
             except Exception:
@@ -232,7 +234,7 @@ class AgentContextBuilder:
 
         pools: list[dict] = list(customer_orders)
         try:
-            pedidos_resp = listar_pedidos(page=1, page_size=200)
+            pedidos_resp = listar_pedidos(page=1, page_size=200, workspace_id=self._workspace_id)
             pools.extend(pedidos_resp.get("data") or [])
         except Exception:
             pass
@@ -260,10 +262,11 @@ class AgentContextBuilder:
 
     def _platform_stats(self) -> dict:
         try:
+            wid = getattr(self, "_workspace_id", None)
             stats = {
-                "clientes": self.dashboard.contar_clientes() or 0,
-                "produtos": self.dashboard.contar_produtos() or 0,
-                "pedidos": self.dashboard.contar_pedidos() or 0,
+                "clientes": self.dashboard.contar_clientes(wid) or 0,
+                "produtos": self.dashboard.contar_produtos(wid) or 0,
+                "pedidos": self.dashboard.contar_pedidos(wid) or 0,
             }
             try:
                 from app.repositories.mercos_sync_repository import MercosSyncRepository
@@ -281,14 +284,14 @@ class AgentContextBuilder:
 
     def _load_sales_metrics(self) -> dict:
         try:
-            return vendas_service.metricas()
+            return vendas_service.metricas(workspace_id=getattr(self, "_workspace_id", None))
         except Exception as exc:
             logger.warning("Falha ao carregar métricas de venda: %s", exc)
             return {}
 
     def _load_recent_orders(self, limit: int = 25) -> list[dict]:
         try:
-            resp = listar_pedidos(page=1, page_size=limit)
+            resp = listar_pedidos(page=1, page_size=limit, workspace_id=self._workspace_id)
             return resp.get("data") or []
         except Exception:
             return []
@@ -565,7 +568,7 @@ def _find_order(ctx: dict, text: str) -> dict | None:
     pools.extend(detail_orders)
     pools.extend(orders)
     try:
-        pedidos_resp = listar_pedidos(page=1, page_size=200)
+        pedidos_resp = listar_pedidos(page=1, page_size=200, workspace_id=self._workspace_id)
         pools.extend(pedidos_resp.get("data") or [])
     except Exception:
         pass

@@ -79,27 +79,36 @@ class ConversasService:
             "role": usuario.get("perfil") or "user",
         }
 
-    def _obter_conversa(self, conversa_id: str) -> dict:
-        conversa = self.conversas.obter(conversa_id)
+    def _obter_conversa(self, conversa_id: str, workspace_id: str | None = None) -> dict:
+        conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
         return conversa
 
-    def _registrar_evento(self, conversa_id: str, content: str) -> None:
+    def _registrar_evento(
+        self,
+        conversa_id: str,
+        content: str,
+        workspace_id: str | None = None,
+    ) -> None:
         self.mensagens.criar({
             "conversa_id": conversa_id,
             "content": content.strip(),
             "sender": "agent",
             "status": "sent",
         })
-        self.conversas.atualizar(conversa_id, {
-            "last_message": content.strip(),
-            "last_message_at": datetime.utcnow().isoformat(),
-        })
+        self.conversas.atualizar(
+            conversa_id,
+            {
+                "last_message": content.strip(),
+                "last_message_at": datetime.utcnow().isoformat(),
+            },
+            workspace_id=workspace_id,
+        )
 
-    def listar_conversas(self) -> list[dict]:
+    def listar_conversas(self, workspace_id: str | None = None) -> list[dict]:
         try:
-            rows = self.conversas.listar()
+            rows = self.conversas.listar(workspace_id=workspace_id)
         except Exception as exc:
             if "conversas" in str(exc).lower():
                 raise HTTPException(
@@ -110,18 +119,24 @@ class ConversasService:
         users = self._users_index()
         return [_map_conversa(row, users) for row in rows]
 
-    def listar_mensagens(self, conversa_id: str) -> list[dict]:
-        if not self.conversas.obter(conversa_id):
+    def listar_mensagens(self, conversa_id: str, workspace_id: str | None = None) -> list[dict]:
+        if not self.conversas.obter(conversa_id, workspace_id=workspace_id):
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
         rows = self.mensagens.listar_por_conversa(conversa_id)
         return [_map_mensagem(row) for row in rows]
 
-    def enviar_mensagem(self, conversa_id: str, content: str, sender: str = "agent") -> dict:
+    def enviar_mensagem(
+        self,
+        conversa_id: str,
+        content: str,
+        sender: str = "agent",
+        workspace_id: str | None = None,
+    ) -> dict:
         if sender not in {"customer", "agent", "ai"}:
             sender = "agent"
 
-        conversa = self.conversas.obter(conversa_id)
+        conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
         if conversa.get("status") == "closed":
@@ -135,11 +150,15 @@ class ConversasService:
             "direction": "outbound",
         })
 
-        self.conversas.atualizar(conversa_id, {
-            "last_message": content.strip(),
-            "last_message_at": datetime.utcnow().isoformat(),
-            "unread_count": 0,
-        })
+        self.conversas.atualizar(
+            conversa_id,
+            {
+                "last_message": content.strip(),
+                "last_message_at": datetime.utcnow().isoformat(),
+                "unread_count": 0,
+            },
+            workspace_id=workspace_id,
+        )
 
         if sender in {"agent", "ai"}:
             from app.services.whatsapp_service import whatsapp_service
@@ -160,46 +179,93 @@ class ConversasService:
 
         return _map_mensagem(mensagem)
 
-    def transferir(self, conversa_id: str, assignee_id: str, actor_name: str) -> dict:
-        self._obter_conversa(conversa_id)
+    def transferir(
+        self,
+        conversa_id: str,
+        assignee_id: str,
+        actor_name: str,
+        workspace_id: str | None = None,
+    ) -> dict:
+        self._obter_conversa(conversa_id, workspace_id=workspace_id)
         assignee = self._usuario_ativo(assignee_id)
         department = PERFIL_DEPARTAMENTO.get(assignee["role"], "Atendimento")
 
-        row = self.conversas.atualizar(conversa_id, {
-            "assigned_to": assignee["id"],
-            "department": department,
-            "status": "active",
-        })
+        row = self.conversas.atualizar(
+            conversa_id,
+            {
+                "assigned_to": assignee["id"],
+                "department": department,
+                "status": "active",
+            },
+            workspace_id=workspace_id,
+        )
         self._registrar_evento(
             conversa_id,
             f"[Sistema] Atendimento transferido para {assignee['name']} ({department}) por {actor_name}.",
+            workspace_id=workspace_id,
         )
         users = self._users_index()
-        return _map_conversa(row or self._obter_conversa(conversa_id), users)
+        return _map_conversa(
+            row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
+            users,
+        )
 
-    def assumir(self, conversa_id: str, user_id: str, actor_name: str) -> dict:
-        return self.transferir(conversa_id, user_id, actor_name)
+    def assumir(
+        self,
+        conversa_id: str,
+        user_id: str,
+        actor_name: str,
+        workspace_id: str | None = None,
+    ) -> dict:
+        return self.transferir(conversa_id, user_id, actor_name, workspace_id=workspace_id)
 
-    def encerrar(self, conversa_id: str, actor_name: str, note: str | None = None) -> dict:
-        self._obter_conversa(conversa_id)
-        row = self.conversas.atualizar(conversa_id, {"status": "closed"})
+    def encerrar(
+        self,
+        conversa_id: str,
+        actor_name: str,
+        note: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict:
+        self._obter_conversa(conversa_id, workspace_id=workspace_id)
+        row = self.conversas.atualizar(
+            conversa_id,
+            {"status": "closed"},
+            workspace_id=workspace_id,
+        )
         detail = f" Motivo: {note.strip()}" if note and note.strip() else ""
         self._registrar_evento(
             conversa_id,
             f"[Sistema] Atendimento encerrado por {actor_name}.{detail}",
+            workspace_id=workspace_id,
         )
         users = self._users_index()
-        return _map_conversa(row or self._obter_conversa(conversa_id), users)
+        return _map_conversa(
+            row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
+            users,
+        )
 
-    def reativar(self, conversa_id: str, actor_name: str) -> dict:
-        self._obter_conversa(conversa_id)
-        row = self.conversas.atualizar(conversa_id, {"status": "active"})
+    def reativar(
+        self,
+        conversa_id: str,
+        actor_name: str,
+        workspace_id: str | None = None,
+    ) -> dict:
+        self._obter_conversa(conversa_id, workspace_id=workspace_id)
+        row = self.conversas.atualizar(
+            conversa_id,
+            {"status": "active"},
+            workspace_id=workspace_id,
+        )
         self._registrar_evento(
             conversa_id,
             f"[Sistema] Atendimento reaberto por {actor_name}.",
+            workspace_id=workspace_id,
         )
         users = self._users_index()
-        return _map_conversa(row or self._obter_conversa(conversa_id), users)
+        return _map_conversa(
+            row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
+            users,
+        )
 
     def reservar_produto(
         self,
@@ -208,8 +274,9 @@ class ConversasService:
         product_name: str,
         actor_name: str,
         quantity: int = 1,
+        workspace_id: str | None = None,
     ) -> dict:
-        conversa = self._obter_conversa(conversa_id)
+        conversa = self._obter_conversa(conversa_id, workspace_id=workspace_id)
         if conversa.get("status") == "closed":
             raise HTTPException(status_code=400, detail="Não é possível reservar em conversa encerrada")
 
@@ -222,12 +289,16 @@ class ConversasService:
                 f"[Sistema] Reserva de {qty}x {label} (ref. {product_id}) "
                 f"registrada por {actor_name}. Validade: 48h (até {expires_at})."
             ),
+            workspace_id=workspace_id,
         )
         users = self._users_index()
-        return _map_conversa(self._obter_conversa(conversa_id), users)
+        return _map_conversa(
+            self._obter_conversa(conversa_id, workspace_id=workspace_id),
+            users,
+        )
 
-    def contar_conversas(self) -> int:
+    def contar_conversas(self, workspace_id: str | None = None) -> int:
         try:
-            return self.conversas.contar()
+            return self.conversas.contar(workspace_id=workspace_id)
         except Exception:
             return 0

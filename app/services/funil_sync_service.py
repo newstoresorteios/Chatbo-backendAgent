@@ -51,11 +51,11 @@ class FunilSyncService:
             supabase.table("funil_negocios").delete().neq("id", SENTINEL_ID).execute()
         return before
 
-    def sincronizar(self) -> dict:
+    def sincronizar(self, workspace_id: str | None = None) -> dict:
         self._ensure_stages()
         removed = self._clear_negocios()
 
-        pedidos_resp = listar_pedidos(page=1, page_size=500)
+        pedidos_resp = listar_pedidos(page=1, page_size=500, workspace_id=workspace_id)
         pedidos = pedidos_resp.get("data") or []
 
         deals_created = 0
@@ -92,7 +92,7 @@ class FunilSyncService:
 
         conversas = []
         try:
-            conversas = self.conversas.listar()
+            conversas = self.conversas.listar(workspace_id=workspace_id)
         except Exception as exc:
             logger.warning("Conversas indisponíveis no sync do funil: %s", exc)
 

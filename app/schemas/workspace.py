@@ -38,6 +38,7 @@ class WorkspaceSettingsUpdate(BaseModel):
 
 class WorkspaceContext(BaseModel):
     workspaceId: str
+    companyId: str | None = None
     workspaceName: str
     workspaceRole: str
     onboardingStatus: str
@@ -46,6 +47,7 @@ class WorkspaceContext(BaseModel):
 
 class WorkspaceResponse(BaseModel):
     id: str
+    companyId: str | None = None
     name: str
     brandName: str | None = None
     role: str
@@ -53,6 +55,7 @@ class WorkspaceResponse(BaseModel):
     accountType: str
     onboardingStatus: str
     settings: WorkspaceSettingsResponse
+    agent: dict | None = None
 
 
 class OnboardingResponse(BaseModel):

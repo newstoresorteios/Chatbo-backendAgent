@@ -224,6 +224,7 @@ class AuthService:
         mapped.update({
             "accountType": context["accountType"],
             "workspaceId": context["workspaceId"],
+            "companyId": context.get("companyId") or context["workspaceId"],
             "workspaceName": context["workspaceName"],
             "workspaceRole": context["workspaceRole"],
             "onboardingStatus": context["onboardingStatus"],

@@ -79,8 +79,8 @@ class PedidoService:
             dados["produto_codigo"] = produto_codigo
         return dados
 
-    def resumo_situacoes(self) -> dict:
-        rows = self.repository.listar()
+    def resumo_situacoes(self, workspace_id: str | None = None) -> dict:
+        rows = self.repository.listar(workspace_id=workspace_id)
         breakdown: dict[str, dict] = {}
         retained = 0.0
 
@@ -110,7 +110,7 @@ class PedidoService:
             "allOrdersProcessing": processing_only,
         }
 
-    def sincronizar(self, *, incremental: bool = True) -> dict:
+    def sincronizar(self, *, incremental: bool = True, workspace_id: str | None = None) -> dict:
         alterado_apos = None
         if incremental:
             alterado_apos = self.sync_logs.ultima_sincronizacao("orders")
@@ -123,10 +123,10 @@ class PedidoService:
         quantidade = 0
 
         for pedido in pedidos:
-            self.repository.salvar(self._mapear_pedido(pedido))
+            self.repository.salvar(self._mapear_pedido(pedido), workspace_id=workspace_id)
             quantidade += 1
 
-        resumo = self.resumo_situacoes()
+        resumo = self.resumo_situacoes(workspace_id=workspace_id)
         cursor = MercosService.max_ultima_alteracao(pedidos if isinstance(pedidos, list) else [])
         mensagem = f"Pedidos sincronizados: {quantidade}."
         if resumo["allOrdersProcessing"]:

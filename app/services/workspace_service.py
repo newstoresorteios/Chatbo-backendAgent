@@ -46,7 +46,15 @@ class WorkspaceService:
         if workspace.get("status") != "active":
             raise HTTPException(status_code=403, detail="Workspace inativo")
         onboarding = self.repo.obter_onboarding(str(workspace.get("id"))) or {}
-        return {"workspaceId": str(workspace.get("id")), "workspaceName": workspace.get("name") or usuario.get("empresa") or "NITRUS", "workspaceRole": membership.get("role") or "member", "onboardingStatus": onboarding.get("status") or "complete", "accountType": account_type}
+        workspace_id = str(workspace.get("id"))
+        return {
+            "workspaceId": workspace_id,
+            "companyId": workspace_id,
+            "workspaceName": workspace.get("name") or usuario.get("empresa") or "NITRUS",
+            "workspaceRole": membership.get("role") or "member",
+            "onboardingStatus": onboarding.get("status") or "complete",
+            "accountType": account_type,
+        }
 
     def criar_workspace_inicial(self, *, user_id: str, name: str) -> dict:
         workspace = self.repo.criar_workspace(name=name)
@@ -76,7 +84,24 @@ class WorkspaceService:
     def obter_workspace_atual(self, usuario: dict) -> dict:
         context = self.get_current_workspace_context(usuario)
         workspace = self.repo.buscar_workspace(context["workspaceId"]) or {}
-        return {"id": context["workspaceId"], "name": workspace.get("name") or context["workspaceName"], "brandName": workspace.get("brand_name"), "role": context["workspaceRole"], "status": workspace.get("status", "active"), "accountType": context["accountType"], "onboardingStatus": context["onboardingStatus"], "settings": self._settings_response(self.repo.obter_settings(context["workspaceId"]))}
+        agent = None
+        try:
+            from app.services.agent_registry_service import agent_registry_service
+            agent = agent_registry_service.obter_agente_empresa(usuario)
+        except Exception:
+            agent = None
+        return {
+            "id": context["workspaceId"],
+            "companyId": context["companyId"],
+            "name": workspace.get("name") or context["workspaceName"],
+            "brandName": workspace.get("brand_name"),
+            "role": context["workspaceRole"],
+            "status": workspace.get("status", "active"),
+            "accountType": context["accountType"],
+            "onboardingStatus": context["onboardingStatus"],
+            "settings": self._settings_response(self.repo.obter_settings(context["workspaceId"])),
+            "agent": agent,
+        }
 
     def _legacy_empresa(self) -> dict:
         try:
