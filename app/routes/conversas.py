@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.auth import obter_token_payload
+from app.core.auth import obter_token_payload, obter_usuario_atual
 from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.repositories.usuario_repository import UsuarioRepository
+from app.services.conversation_agent_context_service import ConversationAgentContextService
 from app.services.conversas_service import ConversasService
 
 router = APIRouter()
 conversas_service = ConversasService()
+conversation_agent_context_service = ConversationAgentContextService()
 
 
 class SendMessageRequest(BaseModel):
@@ -51,6 +53,20 @@ def get_mensagens(
     return conversas_service.listar_mensagens(
         conversation_id,
         workspace_id=workspace_id_from_context(context),
+    )
+
+
+@router.get("/conversas/{conversation_id}/agente")
+def get_conversa_agente(
+    conversation_id: str,
+    usuario: dict = Depends(obter_usuario_atual),
+    context: dict = Depends(obter_company_context),
+):
+    """Contexto AI agregado (funil, memórias, PIX, decisões) para o painel de atendimento."""
+    return conversation_agent_context_service.obter(
+        conversation_id,
+        usuario,
+        workspace_id_from_context(context),
     )
 
 
