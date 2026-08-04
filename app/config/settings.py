@@ -30,8 +30,15 @@ def mercos_base_url_host() -> str | None:
     except Exception:
         return MERCOS_BASE_URL
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = (
+def _clean_env(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip().strip('"').strip("'").strip()
+    return cleaned or None
+
+
+SUPABASE_URL = _clean_env(os.getenv("SUPABASE_URL"))
+SUPABASE_KEY = _clean_env(
     os.getenv("SUPABASE_KEY")
     or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     or os.getenv("SUPABASE_PUBLISHABLE_KEY")

@@ -81,9 +81,31 @@ def health():
         missing.append("SUPABASE_KEY")
     if not os.getenv("JWT_SECRET"):
         missing.append("JWT_SECRET")
+
+    supabase_host = None
+    supabase_url_ok = False
+    if SUPABASE_URL:
+        cleaned = SUPABASE_URL.strip().strip('"').strip("'").strip()
+        supabase_url_ok = cleaned.startswith("https://") and " " not in cleaned
+        try:
+            from urllib.parse import urlparse
+
+            supabase_host = urlparse(cleaned).hostname
+        except Exception:
+            supabase_host = None
+
     if missing:
-        return {"status": "degraded", "missing_env": missing}
-    return {"status": "ok"}
+        return {
+            "status": "degraded",
+            "missing_env": missing,
+            "supabase_url_ok": supabase_url_ok,
+            "supabase_host": supabase_host,
+        }
+    return {
+        "status": "ok" if supabase_url_ok else "degraded",
+        "supabase_url_ok": supabase_url_ok,
+        "supabase_host": supabase_host,
+    }
 
 
 @app.get("/health/db")

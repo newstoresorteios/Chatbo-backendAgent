@@ -33,6 +33,20 @@ def _http_client() -> httpx.Client:
     )
 
 
+def _validated_supabase_url(url: str) -> str:
+    cleaned = url.strip().strip('"').strip("'").strip()
+    if not cleaned.startswith("https://"):
+        raise RuntimeError(
+            "SUPABASE_URL invalida no Render: precisa comecar com https:// "
+            "(ex.: https://xxxx.supabase.co)."
+        )
+    if " " in cleaned or "\n" in cleaned or "\t" in cleaned:
+        raise RuntimeError(
+            "SUPABASE_URL invalida no Render: remova espacos/quebras de linha do valor."
+        )
+    return cleaned.rstrip("/")
+
+
 def get_supabase() -> Client:
     global _client
     if _client is None:
@@ -40,7 +54,14 @@ def get_supabase() -> Client:
             raise RuntimeError(
                 "SUPABASE_URL e SUPABASE_KEY devem estar configurados (Render -> Environment)."
             )
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY, ClientOptions(httpx_client=_http_client()))
+        url = _validated_supabase_url(SUPABASE_URL)
+        key = SUPABASE_KEY.strip().strip('"').strip("'").strip()
+        try:
+            _client = create_client(url, key, ClientOptions(httpx_client=_http_client()))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Falha ao conectar no Supabase (verifique SUPABASE_URL/SUPABASE_KEY no Render): {exc}"
+            ) from exc
     return _client
 
 
