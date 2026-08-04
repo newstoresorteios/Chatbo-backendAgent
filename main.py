@@ -84,3 +84,33 @@ def health():
     if missing:
         return {"status": "degraded", "missing_env": missing}
     return {"status": "ok"}
+
+
+@app.get("/health/db")
+def health_db():
+    """Diagnostico leve da conexao Supabase (sem dados sensiveis)."""
+    missing = []
+    if not SUPABASE_URL:
+        missing.append("SUPABASE_URL")
+    if not SUPABASE_KEY:
+        missing.append("SUPABASE_KEY")
+    if missing:
+        return {"status": "degraded", "missing_env": missing, "db": "skipped"}
+
+    try:
+        from app.services.supabase_service import get_supabase
+
+        client = get_supabase()
+        resposta = client.table("usuarios").select("id").limit(1).execute()
+        return {
+            "status": "ok",
+            "db": "ok",
+            "usuarios_sample": len(resposta.data or []),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "db": "error",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        }

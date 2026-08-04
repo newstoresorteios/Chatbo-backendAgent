@@ -22,10 +22,25 @@ logger = logging.getLogger(__name__)
 
 @router.post("/login")
 def login(credentials: LoginRequest):
-    return auth_service.login(
-        email=credentials.email,
-        password=credentials.password,
-    )
+    try:
+        return auth_service.login(
+            email=credentials.email,
+            password=credentials.password,
+        )
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        logger.exception("Falha de configuracao no login")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc) or "Configuracao Supabase ausente ou invalida.",
+        ) from exc
+    except Exception as exc:
+        logger.exception("Falha inesperada no login")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro interno no login: {exc}",
+        ) from exc
 
 
 @router.post("/register")
