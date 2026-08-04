@@ -33,7 +33,22 @@ def mercos_base_url_host() -> str | None:
 def _clean_env(value: str | None) -> str | None:
     if value is None:
         return None
-    cleaned = value.strip().strip('"').strip("'").strip()
+    cleaned = (
+        value.replace("\ufeff", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\r", "")
+        .replace("\n", "")
+        .strip()
+        .strip('"')
+        .strip("'")
+        .strip("`")
+        .strip()
+    )
+    # Colaram "SUPABASE_URL=https://..." no valor da env
+    if cleaned.upper().startswith("SUPABASE_URL="):
+        cleaned = cleaned.split("=", 1)[1].strip().strip('"').strip("'").strip()
     return cleaned or None
 
 

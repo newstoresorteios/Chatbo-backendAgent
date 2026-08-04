@@ -34,17 +34,20 @@ def _http_client() -> httpx.Client:
 
 
 def _validated_supabase_url(url: str) -> str:
-    cleaned = url.strip().strip('"').strip("'").strip()
-    if not cleaned.startswith("https://"):
+    import re
+
+    cleaned = url.strip().rstrip("/")
+    # Mesma regra do supabase-py: ^(https?)://.+
+    if not re.match(r"^(https?)://.+", cleaned):
+        preview = repr(cleaned[:48])
         raise RuntimeError(
-            "SUPABASE_URL invalida no Render: precisa comecar com https:// "
-            "(ex.: https://xxxx.supabase.co)."
+            "SUPABASE_URL invalida no Render. Use só a Project URL do Supabase, "
+            f"ex.: https://xxxx.supabase.co (valor atual: {preview})."
         )
-    if " " in cleaned or "\n" in cleaned or "\t" in cleaned:
-        raise RuntimeError(
-            "SUPABASE_URL invalida no Render: remova espacos/quebras de linha do valor."
-        )
-    return cleaned.rstrip("/")
+    if "supabase.co" not in cleaned and "localhost" not in cleaned:
+        # aviso suave: ainda pode ser proxy custom
+        pass
+    return cleaned
 
 
 def get_supabase() -> Client:

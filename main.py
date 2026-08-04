@@ -74,6 +74,9 @@ def home():
 
 @app.get("/health")
 def health():
+    import re
+    from urllib.parse import urlparse
+
     missing = []
     if not SUPABASE_URL:
         missing.append("SUPABASE_URL")
@@ -84,28 +87,26 @@ def health():
 
     supabase_host = None
     supabase_url_ok = False
+    supabase_url_preview = None
     if SUPABASE_URL:
-        cleaned = SUPABASE_URL.strip().strip('"').strip("'").strip()
-        supabase_url_ok = cleaned.startswith("https://") and " " not in cleaned
+        cleaned = SUPABASE_URL.strip().rstrip("/")
+        supabase_url_ok = bool(re.match(r"^(https?)://.+", cleaned))
+        supabase_url_preview = repr(cleaned[:48])
         try:
-            from urllib.parse import urlparse
-
             supabase_host = urlparse(cleaned).hostname
         except Exception:
             supabase_host = None
 
-    if missing:
-        return {
-            "status": "degraded",
-            "missing_env": missing,
-            "supabase_url_ok": supabase_url_ok,
-            "supabase_host": supabase_host,
-        }
-    return {
-        "status": "ok" if supabase_url_ok else "degraded",
+    payload = {
         "supabase_url_ok": supabase_url_ok,
         "supabase_host": supabase_host,
+        "supabase_url_preview": supabase_url_preview,
+        "supabase_key_set": bool(SUPABASE_KEY),
+        "python": os.sys.version.split()[0],
     }
+    if missing:
+        return {"status": "degraded", "missing_env": missing, **payload}
+    return {"status": "ok" if supabase_url_ok else "degraded", **payload}
 
 
 @app.get("/health/db")

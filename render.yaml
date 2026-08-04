@@ -1,44 +1,54 @@
-services:
-  - type: web
-    name: xnamai-backend
-    runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
-    autoDeploy: true
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.8"
-      - key: ETL_CRON_SECRET
-        sync: false
-
-  # ETL pedidos — a cada 30 min. Configure no Render:
-  # ETL_BASE_URL=https://SEU-BACKEND.onrender.com/api/etl/run
-  # ETL_CRON_SECRET=mesmo valor do serviço web
-  - type: cron
-    name: pulsedesk-etl-orders
-    runtime: node
-    schedule: "0,30 * * * *"
-    buildCommand: echo ok
-    startCommand: >
-      node -e "const b=process.env.ETL_BASE_URL,t=process.env.ETL_CRON_SECRET;if(!b||!t){console.error('ETL_BASE_URL e ETL_CRON_SECRET obrigatorios');process.exit(1)}fetch(b+'?job=orders&token='+encodeURIComponent(t)).then(r=>r.text()).then(x=>{console.log(x);process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})"
-    envVars:
-      - key: ETL_CRON_SECRET
-        sync: false
-      - key: ETL_BASE_URL
-        sync: false
-
-  # ETL catálogo (clientes + produtos) — 1x/dia às 6h UTC
-  - type: cron
-    name: pulsedesk-etl-catalog
-    runtime: node
-    schedule: "0 6 * * *"
-    buildCommand: echo ok
-    startCommand: >
-      node -e "const b=process.env.ETL_BASE_URL,t=process.env.ETL_CRON_SECRET;if(!b||!t){console.error('ETL_BASE_URL e ETL_CRON_SECRET obrigatorios');process.exit(1)}fetch(b+'?job=catalog&token='+encodeURIComponent(t)).then(r=>r.text()).then(x=>{console.log(x);process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})"
-    envVars:
-      - key: ETL_CRON_SECRET
-        sync: false
-      - key: ETL_BASE_URL
-        sync: false
+services:
+  - type: web
+    name: chatbo-backendagent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://www.chatbo.com.br
+      - key: CORS_ORIGINS
+        value: https://www.chatbo.com.br,https://chatbo.com.br
+      - key: ETL_CRON_SECRET
+        sync: false
+
+  # ETL pedidos — a cada 30 min. Configure no Render:
+  # ETL_BASE_URL=https://SEU-BACKEND.onrender.com/api/etl/run
+  # ETL_CRON_SECRET=mesmo valor do serviço web
+  - type: cron
+    name: pulsedesk-etl-orders
+    runtime: node
+    schedule: "0,30 * * * *"
+    buildCommand: echo ok
+    startCommand: >
+      node -e "const b=process.env.ETL_BASE_URL,t=process.env.ETL_CRON_SECRET;if(!b||!t){console.error('ETL_BASE_URL e ETL_CRON_SECRET obrigatorios');process.exit(1)}fetch(b+'?job=orders&token='+encodeURIComponent(t)).then(r=>r.text()).then(x=>{console.log(x);process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})"
+    envVars:
+      - key: ETL_CRON_SECRET
+        sync: false
+      - key: ETL_BASE_URL
+        sync: false
+
+  # ETL catálogo (clientes + produtos) — 1x/dia às 6h UTC
+  - type: cron
+    name: pulsedesk-etl-catalog
+    runtime: node
+    schedule: "0 6 * * *"
+    buildCommand: echo ok
+    startCommand: >
+      node -e "const b=process.env.ETL_BASE_URL,t=process.env.ETL_CRON_SECRET;if(!b||!t){console.error('ETL_BASE_URL e ETL_CRON_SECRET obrigatorios');process.exit(1)}fetch(b+'?job=catalog&token='+encodeURIComponent(t)).then(r=>r.text()).then(x=>{console.log(x);process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})"
+    envVars:
+      - key: ETL_CRON_SECRET
+        sync: false
+      - key: ETL_BASE_URL
+        sync: false
