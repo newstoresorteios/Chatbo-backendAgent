@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS public.agent_personas (
   examples JSONB NOT NULL DEFAULT '[]'::jsonb,
   status TEXT NOT NULL DEFAULT 'draft',
   version INTEGER NOT NULL DEFAULT 1,
-  created_by TEXT REFERENCES public.usuarios(id) ON DELETE SET NULL,
-  updated_by TEXT REFERENCES public.usuarios(id) ON DELETE SET NULL,
-  activated_by TEXT REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  updated_by UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  activated_by UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
   activated_at TIMESTAMPTZ,
   deactivated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS public.agent_persona_versions (
   version INTEGER NOT NULL,
   snapshot JSONB NOT NULL,
   change_type TEXT NOT NULL,
-  created_by TEXT REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT agent_persona_versions_change_type_check CHECK (
     change_type IN ('created', 'updated', 'activated', 'deactivated')

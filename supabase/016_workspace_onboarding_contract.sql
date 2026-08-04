@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS public.workspace_onboarding_tests (
   output_preview TEXT,
   error_message TEXT,
   completed_at TIMESTAMPTZ,
-  created_by TEXT REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  created_by UUID REFERENCES public.usuarios(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT workspace_onboarding_tests_status_check CHECK (status IN ('success', 'failed'))
 );
