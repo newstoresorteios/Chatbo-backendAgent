@@ -56,7 +56,36 @@ class WorkspaceRepository:
             .execute()
         )
         rows = resposta.data or []
-        return rows[0] if rows else {"name": name, "brand_name": brand_name, "status": "active"}
+        workspace = rows[0] if rows else {"name": name, "brand_name": brand_name, "status": "active"}
+        workspace_id = workspace.get("id")
+        # company_id === workspace.id (modelo multi-empresa atual)
+        if workspace_id and not workspace.get("company_id"):
+            try:
+                updated = (
+                    supabase
+                    .table("workspaces")
+                    .update({"company_id": workspace_id})
+                    .eq("id", workspace_id)
+                    .execute()
+                )
+                if updated.data:
+                    workspace = updated.data[0]
+                else:
+                    workspace = {**workspace, "company_id": workspace_id}
+            except Exception:
+                workspace = {**workspace, "company_id": workspace_id}
+        return workspace
+
+    def listar_memberships_detalhados(self, workspace_id: str) -> list[dict]:
+        resposta = (
+            supabase
+            .table("workspace_members")
+            .select("id,workspace_id,user_id,role,status,created_at")
+            .eq("workspace_id", workspace_id)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return resposta.data or []
 
     def atualizar_workspace(self, workspace_id: str, dados: dict) -> dict:
         resposta = (

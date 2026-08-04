@@ -46,6 +46,42 @@ class ConversaRepository:
         rows = resposta.data or []
         return rows[0] if rows else None
 
+    def obter_por_contato(
+        self,
+        identity: str,
+        workspace_id: str | None = None,
+    ) -> dict | None:
+        """Busca conversa por telefone / thread externa no workspace."""
+        if not identity:
+            return None
+        for column in ("contact_phone", "external_thread_id"):
+            query = (
+                supabase
+                .table("conversas")
+                .select("*")
+                .eq(column, identity)
+                .order("last_message_at", desc=True)
+                .limit(1)
+            )
+            if workspace_id:
+                query = apply_workspace_filter(query, workspace_id)
+            rows = (query.execute().data) or []
+            if rows:
+                return rows[0]
+        return None
+
+    def listar_legado_sem_workspace(self) -> list[dict]:
+        """Conversas antigas sem workspace_id (fallback do inbox)."""
+        resposta = (
+            supabase
+            .table("conversas")
+            .select("*")
+            .is_("workspace_id", "null")
+            .order("last_message_at", desc=True)
+            .execute()
+        )
+        return resposta.data or []
+
     def criar(self, dados: dict, workspace_id: str | None = None) -> dict:
         payload = enriquecer_dados_conversa_com_cliente_id(dados)
         if workspace_id:

@@ -107,8 +107,21 @@ class ConversasService:
         )
 
     def listar_conversas(self, workspace_id: str | None = None) -> list[dict]:
+        if workspace_id:
+            try:
+                from app.services.ai_conversas_bridge import ai_conversas_bridge
+
+                synced = ai_conversas_bridge.sync_workspace(workspace_id)
+                if synced:
+                    logger.info("Inbox sync AI: %s thread(s) para workspace %s", synced, workspace_id)
+            except Exception as exc:
+                logger.warning("Sync AI → conversas falhou: %s", exc)
+
         try:
             rows = self.conversas.listar(workspace_id=workspace_id)
+            # Fallback: conversas legadas sem workspace_id (antes do multi-tenant).
+            if workspace_id and not rows:
+                rows = self.conversas.listar_legado_sem_workspace()
         except Exception as exc:
             if "conversas" in str(exc).lower():
                 raise HTTPException(

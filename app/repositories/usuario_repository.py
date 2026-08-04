@@ -102,7 +102,7 @@ class UsuarioRepository:
         resposta = (
             supabase
             .table("usuarios")
-            .select("id,email,nome,perfil,ativo,empresa,created_at,updated_at")
+            .select("id,email,nome,perfil,ativo,empresa,account_type,created_at,updated_at")
             .in_("id", usuario_ids)
             .order("nome")
             .execute()
