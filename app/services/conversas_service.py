@@ -40,6 +40,7 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
 
 
 def _map_mensagem(row: dict) -> dict:
+    external_id = row.get("external_id")
     return {
         "id": str(row.get("id")),
         "conversationId": str(row.get("conversa_id")),
@@ -47,7 +48,57 @@ def _map_mensagem(row: dict) -> dict:
         "sender": row.get("sender") or "agent",
         "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
         "status": row.get("status") or "sent",
+        "externalId": str(external_id) if external_id else None,
     }
+
+
+def _message_dedupe_keys(msg: dict) -> list[str]:
+    """Chaves estáveis para unir mensagens persistidas + transcript NSAgent."""
+    keys: list[str] = []
+    external = msg.get("externalId") or msg.get("external_id")
+    msg_id = msg.get("id")
+    if external:
+        keys.append(f"ext:{external}")
+    # Transcript usa id=ai-in-123; sync grava external_id=ai-in-123 e id=uuid.
+    if msg_id and str(msg_id).startswith("ai-"):
+        keys.append(f"ext:{msg_id}")
+    if msg_id:
+        keys.append(f"id:{msg_id}")
+    content = " ".join(str(msg.get("content") or "").split()).strip().lower()
+    sender = str(msg.get("sender") or "")
+    ts = str(msg.get("timestamp") or "")[:16]  # até minutos
+    if content and sender:
+        keys.append(f"fp:{sender}:{ts}:{content[:180]}")
+    return keys
+
+
+def _merge_mensagens(mapped: list[dict], transcript: list[dict]) -> list[dict]:
+    """Une mensagens locais com transcript NSAgent sem duplicar."""
+    items: list[dict] = []
+    index: dict[str, int] = {}
+
+    def upsert(msg: dict, prefer: bool = False) -> None:
+        keys = _message_dedupe_keys(msg)
+        if not keys:
+            return
+        existing_idx = next((index[k] for k in keys if k in index), None)
+        if existing_idx is not None:
+            if prefer:
+                items[existing_idx] = msg
+            for k in keys:
+                index[k] = existing_idx
+            return
+        idx = len(items)
+        items.append(msg)
+        for k in keys:
+            index[k] = idx
+
+    for msg in mapped:
+        upsert(msg, prefer=False)
+    for msg in transcript:
+        upsert(msg, prefer=True)
+
+    return sorted(items, key=lambda m: m.get("timestamp") or "")
 
 
 class ConversasService:
@@ -160,25 +211,13 @@ class ConversasService:
         rows = self.mensagens.listar_por_conversa(conversa_id)
         mapped = [_map_mensagem(row) for row in rows]
 
-        # Sempre mescla o transcript do NSAgent (evita chat “vazio” ou só com mensagens locais).
+        # Mescla transcript NSAgent, deduplicando sync (uuid+external_id) vs ai-in/ai-out.
         try:
             from app.services.ai_conversas_bridge import ai_conversas_bridge
 
             transcript = ai_conversas_bridge.transcript_for_conversa(conversa)
             if transcript:
-                by_key: dict[str, dict] = {}
-                for msg in mapped:
-                    key = str(msg.get("id") or "")
-                    if key:
-                        by_key[key] = msg
-                for msg in transcript:
-                    key = str(msg.get("id") or "")
-                    if key and key not in by_key:
-                        by_key[key] = msg
-                    elif key:
-                        # Prefer content do NSAgent para ids ai-*
-                        by_key[key] = msg
-                return sorted(by_key.values(), key=lambda m: m.get("timestamp") or "")
+                return _merge_mensagens(mapped, transcript)
         except Exception as exc:
             logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
 
