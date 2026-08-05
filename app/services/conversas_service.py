@@ -227,24 +227,24 @@ class ConversasService:
             workspace_id=workspace_id,
         )
 
-        delivery: dict = {"sent": False}
+        delivery: dict = {"sent": False, "reason": "Brevo não tentado"}
         if sender in {"agent", "ai"}:
             from app.services.brevo_outbound_service import brevo_outbound_service
-            from app.services.whatsapp_service import whatsapp_service
 
-            # New Store: prioriza Brevo (mesmo caminho do NSAgent).
-            if brevo_outbound_service.configurado():
+            # New Store: somente Brevo (mesmo caminho do NSAgentForSorteios).
+            if not brevo_outbound_service.configurado():
+                delivery = {
+                    "sent": False,
+                    "reason": (
+                        "BREVO_API_KEY ausente no Render. Copie as variáveis Brevo do "
+                        "NSAgentForSorteios (BREVO_API_KEY, BREVO_SENDER_NUMBER, "
+                        "BREVO_AGENT_ID ou BREVO_AGENT_EMAIL/NAME, BREVO_REPLY_MODE)."
+                    ),
+                    "brevoStatus": brevo_outbound_service.status(),
+                }
+            else:
                 delivery = brevo_outbound_service.enviar_para_conversa(conversa, content.strip())
-            if not delivery.get("sent"):
-                meta = whatsapp_service.enviar_para_conversa(
-                    conversa,
-                    content.strip(),
-                    str(mensagem.get("id")),
-                )
-                if meta.get("sent"):
-                    delivery = meta
-                elif not delivery.get("reason"):
-                    delivery = meta
+                delivery["brevoStatus"] = brevo_outbound_service.status()
 
             if mensagem.get("id"):
                 self.mensagens.atualizar(
@@ -256,10 +256,15 @@ class ConversasService:
                 )
 
             if not delivery.get("sent"):
+                logger.error(
+                    "Falha envio Brevo conversa=%s reason=%s",
+                    conversa_id,
+                    delivery.get("reason"),
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=delivery.get("reason")
-                    or "Não foi possível entregar a mensagem ao cliente",
+                    or "Não foi possível entregar a mensagem ao cliente via Brevo",
                 )
         elif sender == "customer":
             try:

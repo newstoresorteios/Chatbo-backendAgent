@@ -58,6 +58,18 @@ def obter_permissoes(usuario: dict = Depends(obter_usuario_atual)):
     return settings_service.permissoes_do_perfil(perfil_efetivo(usuario))
 
 
+@router.get("/settings/brevo")
+def obter_status_brevo(usuario: dict = Depends(obter_usuario_atual)):
+    """Diagnóstico do envio Brevo (mesmo canal do NSAgent)."""
+    from app.core.permissions import perfil_efetivo, tem_permissao
+    from app.services.brevo_outbound_service import brevo_outbound_service
+    from fastapi import HTTPException
+
+    if not tem_permissao(perfil_efetivo(usuario), "managePlatform"):
+        raise HTTPException(status_code=403, detail="Sem permissão")
+    return brevo_outbound_service.status()
+
+
 @router.post("/settings/alterar-senha")
 def alterar_senha(
     body: ChangePasswordRequest,

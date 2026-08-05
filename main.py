@@ -122,6 +122,8 @@ def health():
     key_ok = key_role == "service_role"
     healthy = supabase_url_ok and key_ok and not missing
 
+    from app.config.settings import BREVO_API_KEY, BREVO_SENDER_NUMBER, BREVO_AGENT_ID, BREVO_AGENT_EMAIL
+
     payload = {
         "supabase_url_ok": supabase_url_ok,
         "supabase_host": supabase_host,
@@ -129,6 +131,9 @@ def health():
         "supabase_key_set": bool(SUPABASE_KEY),
         "supabase_key_role": key_role,
         "supabase_key_ok": key_ok,
+        "brevo_api_key_set": bool(BREVO_API_KEY),
+        "brevo_sender_set": bool(BREVO_SENDER_NUMBER),
+        "brevo_agent_set": bool(BREVO_AGENT_ID or BREVO_AGENT_EMAIL),
         "hint": None
         if key_ok
         else "Defina SUPABASE_KEY com a service_role (Project Settings → API), nao a anon/publishable.",

@@ -116,9 +116,11 @@ NITRUS_INTERNAL_API_TOKEN = os.getenv("NITRUS_INTERNAL_API_TOKEN")
 BREVO_API_KEY = _clean_env(os.getenv("BREVO_API_KEY")) or ""
 BREVO_AGENT_ID = _clean_env(os.getenv("BREVO_AGENT_ID")) or ""
 BREVO_AGENT_EMAIL = _clean_env(os.getenv("BREVO_AGENT_EMAIL")) or ""
-BREVO_AGENT_NAME = _clean_env(os.getenv("BREVO_AGENT_NAME")) or "ChatBô"
+BREVO_AGENT_NAME = _clean_env(os.getenv("BREVO_AGENT_NAME")) or "NewStoreAgent"
 BREVO_RECEIVED_FROM = _clean_env(os.getenv("BREVO_RECEIVED_FROM")) or BREVO_AGENT_NAME
 BREVO_SENDER_NUMBER = _clean_env(os.getenv("BREVO_SENDER_NUMBER")) or ""
+BREVO_REPLY_MODE = _clean_env(os.getenv("BREVO_REPLY_MODE")) or "auto"
+BREVO_SEND_URL = _clean_env(os.getenv("BREVO_SEND_URL")) or ""
 
 # ETL agendado (Render Cron) — sync Mercos → Supabase sem sobrecarregar a API
 ETL_CRON_SECRET = os.getenv("ETL_CRON_SECRET", "")
