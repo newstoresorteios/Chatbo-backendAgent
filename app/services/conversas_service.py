@@ -173,15 +173,34 @@ class ConversasService:
         )
 
     def listar_conversas(self, workspace_id: str | None = None) -> list[dict]:
+        cache_key = f"conversas:{workspace_id or 'all'}"
+        cached = None
+        try:
+            from app.services.inbox_cache import conversas_cache
+
+            cached = conversas_cache.get(cache_key)
+        except Exception:
+            cached = None
+
         if workspace_id:
             try:
                 from app.services.ai_conversas_bridge import ai_conversas_bridge
+                from app.services.inbox_cache import SYNC_WORKSPACE_INTERVAL, sync_throttle
 
-                synced = ai_conversas_bridge.sync_workspace(workspace_id)
-                if synced:
-                    logger.info("Inbox sync AI: %s thread(s) para workspace %s", synced, workspace_id)
+                if sync_throttle.should_run(f"ws-sync:{workspace_id}", SYNC_WORKSPACE_INTERVAL):
+                    synced = ai_conversas_bridge.sync_workspace(workspace_id)
+                    if synced:
+                        logger.info(
+                            "Inbox sync AI: %s thread(s) para workspace %s",
+                            synced,
+                            workspace_id,
+                        )
+                        cached = None  # força refresh após sync com novidades
             except Exception as exc:
                 logger.warning("Sync AI → conversas falhou: %s", exc)
+
+        if cached is not None:
+            return cached
 
         try:
             rows = self.conversas.listar(workspace_id=workspace_id)
@@ -196,9 +215,26 @@ class ConversasService:
                 ) from exc
             raise
         users = self._users_index()
-        return [_map_conversa(row, users) for row in rows]
+        mapped = [_map_conversa(row, users) for row in rows]
+        try:
+            from app.services.inbox_cache import CONVERSAS_TTL, conversas_cache
+
+            conversas_cache.set(cache_key, mapped, CONVERSAS_TTL)
+        except Exception:
+            pass
+        return mapped
 
     def listar_mensagens(self, conversa_id: str, workspace_id: str | None = None) -> list[dict]:
+        cache_key = f"mensagens:{conversa_id}"
+        try:
+            from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache
+
+            cached = mensagens_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        except Exception:
+            pass
+
         conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
         if not conversa and workspace_id:
             # Conversas legadas / sync sem workspace no filtro.
@@ -206,36 +242,45 @@ class ConversasService:
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-        # New Store / NSAgent: materializa ai_inbound_messages + ai_agent_responses nesta conversa.
+        # Sync NSAgent com throttle — evita N queries a cada poll de 2s.
+        written = 0
         try:
             from app.services.ai_conversas_bridge import ai_conversas_bridge
+            from app.services.inbox_cache import SYNC_MSG_INTERVAL, sync_throttle
 
-            written = ai_conversas_bridge.sync_messages_for_conversa(
-                conversa,
-                workspace_id or conversa.get("workspace_id"),
-            )
-            if written:
-                logger.info(
-                    "Inbox sync mensagens: %s nova(s) na conversa %s",
-                    written,
-                    conversa_id,
-                )
+            ws = workspace_id or conversa.get("workspace_id")
+            if sync_throttle.should_run(f"msg-sync:{conversa_id}", SYNC_MSG_INTERVAL):
+                written = ai_conversas_bridge.sync_messages_for_conversa(conversa, ws)
+                if written:
+                    logger.info(
+                        "Inbox sync mensagens: %s nova(s) na conversa %s",
+                        written,
+                        conversa_id,
+                    )
         except Exception as exc:
             logger.warning("Sync mensagens AI falhou para %s: %s", conversa_id, exc)
 
         rows = self.mensagens.listar_por_conversa(conversa_id)
         mapped = [_map_mensagem(row) for row in rows]
 
-        # Mescla transcript NSAgent, deduplicando sync (uuid+external_id) vs ai-in/ai-out.
+        # Transcript só como fallback se a tabela mensagens ainda estiver vazia.
+        # (Antes rodava em TODO poll e duplicava o custo do sync.)
+        if not mapped:
+            try:
+                from app.services.ai_conversas_bridge import ai_conversas_bridge
+
+                transcript = ai_conversas_bridge.transcript_for_conversa(conversa)
+                if transcript:
+                    mapped = _merge_mensagens([], transcript)
+            except Exception as exc:
+                logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
+
         try:
-            from app.services.ai_conversas_bridge import ai_conversas_bridge
+            from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache
 
-            transcript = ai_conversas_bridge.transcript_for_conversa(conversa)
-            if transcript:
-                return _merge_mensagens(mapped, transcript)
-        except Exception as exc:
-            logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
-
+            mensagens_cache.set(cache_key, mapped, MENSAGENS_TTL)
+        except Exception:
+            pass
         return mapped
 
     def enviar_mensagem(
@@ -344,6 +389,12 @@ class ConversasService:
 
         mapped = _map_mensagem(mensagem)
         mapped["delivery"] = delivery
+        try:
+            from app.services.inbox_cache import invalidate_conversa
+
+            invalidate_conversa(conversa_id, workspace_id or conversa.get("workspace_id"))
+        except Exception:
+            pass
         return mapped
 
     def transferir(
@@ -385,6 +436,12 @@ class ConversasService:
             event,
             workspace_id=workspace_id,
         )
+        try:
+            from app.services.inbox_cache import invalidate_conversa
+
+            invalidate_conversa(conversa_id, workspace_id)
+        except Exception:
+            pass
         users = self._users_index()
         return _map_conversa(
             row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
@@ -425,6 +482,12 @@ class ConversasService:
             f"[Sistema] Atendimento encerrado por {actor_name}.{detail}",
             workspace_id=workspace_id,
         )
+        try:
+            from app.services.inbox_cache import invalidate_conversa
+
+            invalidate_conversa(conversa_id, workspace_id)
+        except Exception:
+            pass
         users = self._users_index()
         return _map_conversa(
             row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
@@ -448,6 +511,12 @@ class ConversasService:
             f"[Sistema] Atendimento reaberto por {actor_name}.",
             workspace_id=workspace_id,
         )
+        try:
+            from app.services.inbox_cache import invalidate_conversa
+
+            invalidate_conversa(conversa_id, workspace_id)
+        except Exception:
+            pass
         users = self._users_index()
         return _map_conversa(
             row or self._obter_conversa(conversa_id, workspace_id=workspace_id),

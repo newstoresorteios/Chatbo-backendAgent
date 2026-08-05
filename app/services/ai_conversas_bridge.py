@@ -82,29 +82,37 @@ class AiConversasBridge:
 
     def _fetch_inbounds_for_keys(self, keys: list[str]) -> list[dict]:
         by_id: dict[Any, dict] = {}
+        # Uma coluna por chave (em vez de 3×N queries). conversation_id cobre Brevo.
         for key in keys:
-            for column in ("conversation_id", "sender_key", "sender_phone"):
-                for row in self._query_ai("ai_inbound_messages", column, key):
+            for column in ("conversation_id", "sender_key", "sender_phone", "visitor_id"):
+                rows = self._query_ai("ai_inbound_messages", column, key, limit=200)
+                for row in rows:
                     row_id = row.get("id")
                     if row_id is not None:
                         by_id[row_id] = row
+                # Se achou pela conversation_id, não precisa varrer as outras colunas desta key.
+                if column == "conversation_id" and rows:
+                    break
         return sorted(by_id.values(), key=lambda r: r.get("created_at") or "")
 
     def _fetch_responses_for_keys(self, keys: list[str], inbound_ids: list[Any]) -> list[dict]:
         by_id: dict[Any, dict] = {}
-        for key in keys:
-            for column in ("sender_key", "sender_phone"):
-                for row in self._query_ai("ai_agent_responses", column, key):
-                    row_id = row.get("id")
-                    if row_id is not None:
-                        by_id[row_id] = row
+        # Prefer resolve via inbound_id (1 query por inbound) — mais barato que varrer sender.
         for inbound_id in inbound_ids:
             if inbound_id is None:
                 continue
-            for row in self._query_ai("ai_agent_responses", "inbound_id", str(inbound_id)):
+            for row in self._query_ai("ai_agent_responses", "inbound_id", str(inbound_id), limit=50):
                 row_id = row.get("id")
                 if row_id is not None:
                     by_id[row_id] = row
+        if by_id:
+            return sorted(by_id.values(), key=lambda r: r.get("created_at") or "")
+        for key in keys:
+            for column in ("sender_key", "sender_phone"):
+                for row in self._query_ai("ai_agent_responses", column, key, limit=200):
+                    row_id = row.get("id")
+                    if row_id is not None:
+                        by_id[row_id] = row
         return sorted(by_id.values(), key=lambda r: r.get("created_at") or "")
 
     def _ensure_conversa(self, workspace_id: str, key: str, sample: dict) -> dict:
