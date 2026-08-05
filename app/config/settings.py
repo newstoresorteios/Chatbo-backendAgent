@@ -118,9 +118,23 @@ BREVO_AGENT_ID = _clean_env(os.getenv("BREVO_AGENT_ID")) or ""
 BREVO_AGENT_EMAIL = _clean_env(os.getenv("BREVO_AGENT_EMAIL")) or ""
 BREVO_AGENT_NAME = _clean_env(os.getenv("BREVO_AGENT_NAME")) or "NewStoreAgent"
 BREVO_RECEIVED_FROM = _clean_env(os.getenv("BREVO_RECEIVED_FROM")) or BREVO_AGENT_NAME
-BREVO_SENDER_NUMBER = _clean_env(os.getenv("BREVO_SENDER_NUMBER")) or ""
+# Alias usado em outros projetos New Store (ex.: lotomania-cron)
+BREVO_SENDER_NUMBER = (
+    _clean_env(os.getenv("BREVO_SENDER_NUMBER"))
+    or _clean_env(os.getenv("BREVO_WHATSAPP_SENDER_NUMBER"))
+    or ""
+)
 BREVO_REPLY_MODE = _clean_env(os.getenv("BREVO_REPLY_MODE")) or "auto"
-BREVO_SEND_URL = _clean_env(os.getenv("BREVO_SEND_URL")) or ""
+BREVO_SEND_URL = (
+    _clean_env(os.getenv("BREVO_SEND_URL"))
+    or _clean_env(os.getenv("BREVO_WHATSAPP_BASE_URL"))
+    or ""
+)
+# Se colaram só a base URL, monta o path de envio WhatsApp.
+if BREVO_SEND_URL and "sendMessage" not in BREVO_SEND_URL and BREVO_SEND_URL.rstrip("/").endswith("/v3"):
+    BREVO_SEND_URL = BREVO_SEND_URL.rstrip("/") + "/whatsapp/sendMessage"
+elif BREVO_SEND_URL and BREVO_SEND_URL.rstrip("/") == "https://api.brevo.com/v3":
+    BREVO_SEND_URL = "https://api.brevo.com/v3/whatsapp/sendMessage"
 
 # ETL agendado (Render Cron) — sync Mercos → Supabase sem sobrecarregar a API
 ETL_CRON_SECRET = os.getenv("ETL_CRON_SECRET", "")

@@ -35,6 +35,26 @@ def _normalize_phone(phone: str | None) -> str | None:
     return digits or None
 
 
+def _sender_number_candidates(phone: str | None) -> list[str]:
+    """Brevo às vezes registra com 55 e às vezes só DDD+número (ex.: 21974...)."""
+    base = _normalize_phone(phone)
+    if not base:
+        return []
+    out: list[str] = [base]
+    if base.startswith("55") and len(base) >= 12:
+        out.append(base[2:])
+    elif not base.startswith("55") and len(base) >= 10:
+        out.append("55" + base)
+    # unique preserve order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for item in out:
+        if item not in seen:
+            seen.add(item)
+            uniq.append(item)
+    return uniq
+
+
 class BrevoOutboundService:
     def configurado(self) -> bool:
         return bool(BREVO_API_KEY)
@@ -171,32 +191,40 @@ class BrevoOutboundService:
 
     def _send_whatsapp(self, sender_phone: str, text: str) -> dict:
         recipient = _normalize_phone(sender_phone)
-        sender = _normalize_phone(BREVO_SENDER_NUMBER)
+        senders = _sender_number_candidates(BREVO_SENDER_NUMBER)
         if not recipient:
             return {"sent": False, "reason": "Telefone do cliente ausente no inbound Brevo"}
-        if not sender:
+        if not senders:
             return {
                 "sent": False,
                 "reason": "BREVO_SENDER_NUMBER não configurado no Render (igual ao NSAgent)",
             }
         send_url = (BREVO_SEND_URL or BREVO_WHATSAPP_SEND_URL).strip()
-        result = self._post(
-            send_url,
-            {
-                "contactNumbers": [recipient],
-                "senderNumber": sender,
-                "text": text,
-            },
-        )
-        if result["ok"]:
-            return {"sent": True, "channel": "brevo_whatsapp", "provider": result["body"]}
-        detail = result["body"]
+        last: dict = {}
+        for sender in senders:
+            result = self._post(
+                send_url,
+                {
+                    "contactNumbers": [recipient],
+                    "senderNumber": sender,
+                    "text": text,
+                },
+            )
+            last = result
+            if result["ok"]:
+                return {
+                    "sent": True,
+                    "channel": "brevo_whatsapp",
+                    "senderNumber": sender,
+                    "provider": result["body"],
+                }
+        detail = last.get("body")
         msg = None
         if isinstance(detail, dict):
             msg = detail.get("message") or detail.get("error") or str(detail)[:200]
         return {
             "sent": False,
-            "reason": f"Brevo WhatsApp HTTP {result['status_code']}: {msg or 'falha'}",
+            "reason": f"Brevo WhatsApp HTTP {last.get('status_code')}: {msg or 'falha'}",
             "provider": detail,
         }
 
