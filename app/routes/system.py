@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import requer_admin, verificar_token
 from app.core.billing_permissions import requer_system_admin
+from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.billing_service import billing_service
 from app.services.commercial_bi_service import commercial_bi_service
@@ -50,8 +51,13 @@ class DataSourceTestRequest(BaseModel):
 
 
 @router.get("/sistema/status")
-def get_system_status(autorizado=Depends(verificar_token)):
-    return system_status_service.get_status()
+def get_system_status(
+    autorizado=Depends(verificar_token),
+    context: dict = Depends(obter_company_context),
+):
+    return system_status_service.get_status(
+        workspace_id=workspace_id_from_context(context),
+    )
 
 
 @router.post("/sistema/limpar-demo")

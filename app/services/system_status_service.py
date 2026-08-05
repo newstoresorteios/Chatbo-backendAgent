@@ -70,11 +70,26 @@ class SystemStatusService:
     def __init__(self):
         self.whatsapp = WhatsAppService()
 
-    def get_status(self) -> dict:
+    def get_status(self, workspace_id: str | None = None) -> dict:
         supabase_status = _check_supabase()
-        mercos = mercos_status()
+        try:
+            mercos = mercos_status(workspace_id=workspace_id) if workspace_id else {
+                "connected": False,
+                "syncedCustomers": 0,
+                "syncedProducts": 0,
+                "syncedOrders": 0,
+            }
+        except Exception as exc:
+            logger.warning("Falha ao obter status Mercos: %s", exc)
+            mercos = {
+                "connected": False,
+                "syncedCustomers": 0,
+                "syncedProducts": 0,
+                "syncedOrders": 0,
+                "error": str(exc)[:120],
+            }
         whatsapp = self.whatsapp.status()
-        agent = agent_service.status()
+        agent = agent_service.status(workspace_id=workspace_id)
         customers_with_phone = _count_customers_with_phone()
 
         mercos_configured = bool(mercos.get("connected"))
