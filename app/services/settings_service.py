@@ -15,6 +15,7 @@ DEFAULT_NOTIFICATIONS = {
 ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
     "admin": {
         "viewReports": True,
+        "viewFinancial": True,
         "manageUsers": True,
         "manageIntegrations": True,
         "managePlatform": True,
@@ -22,6 +23,7 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
     },
     "supervisor": {
         "viewReports": True,
+        "viewFinancial": True,
         "manageUsers": False,
         "manageIntegrations": True,
         "managePlatform": True,
@@ -29,6 +31,7 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
     },
     "vendedor": {
         "viewReports": False,
+        "viewFinancial": False,
         "manageUsers": False,
         "manageIntegrations": False,
         "managePlatform": False,
@@ -36,6 +39,7 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
     },
     "user": {
         "viewReports": False,
+        "viewFinancial": False,
         "manageUsers": False,
         "manageIntegrations": False,
         "managePlatform": False,
@@ -113,9 +117,10 @@ class SettingsService:
             "permissions": perms,
             "labels": {
                 "viewReports": "Visualizar relatórios",
+                "viewFinancial": "Ver painel comercial, pedidos e funil",
                 "manageUsers": "Gerenciar usuários",
                 "manageIntegrations": "Gerenciar integrações e sincronização",
-                "managePlatform": "Gerenciar canais, campanhas e robô",
+                "managePlatform": "Gerenciar canais, campanhas, persona e robô",
                 "exportData": "Exportar dados",
             },
         }

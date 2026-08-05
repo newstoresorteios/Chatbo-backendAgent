@@ -259,12 +259,12 @@ def sincronizar_produtos(
 
 
 @router.get("/pedidos")
-def listar_pedidos(autorizado=Depends(verificar_token)):
+def listar_pedidos(_: dict = Depends(requer_permissao("viewFinancial"))):
     return mercos.listar_pedidos()
 
 
 @router.get("/pedidos/{pedido_id}")
-def obter_pedido(pedido_id: int, autorizado=Depends(verificar_token)):
+def obter_pedido(pedido_id: int, _: dict = Depends(requer_permissao("viewFinancial"))):
     """GET usa API v1 (/pedidos/{id}). Create/update usam v2."""
     return mercos.obter_pedido(pedido_id)
 

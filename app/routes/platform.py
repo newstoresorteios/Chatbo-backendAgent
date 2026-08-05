@@ -77,7 +77,7 @@ def toggle_canal(channel_id: str, _: dict = Depends(requer_permissao("managePlat
 
 
 @router.get("/funil")
-def get_funil(autorizado=Depends(verificar_token)):
+def get_funil(_: dict = Depends(requer_permissao("viewFinancial"))):
     return platform_service.get_funnel()
 
 

@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/dashboard")
 def get_dashboard(
-    autorizado=Depends(verificar_token),
+    _: dict = Depends(requer_permissao("viewFinancial")),
     context: dict = Depends(obter_company_context),
 ):
     return dashboard_data(workspace_id=workspace_id_from_context(context))
@@ -95,7 +95,7 @@ def get_pedidos(
     pageSize: int = 10,
     search: str = "",
     status: str | None = None,
-    autorizado=Depends(verificar_token),
+    _: dict = Depends(requer_permissao("viewFinancial")),
     context: dict = Depends(obter_company_context),
 ):
     return listar_pedidos(

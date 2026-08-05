@@ -53,15 +53,9 @@ def salvar_preferencias(
 
 @router.get("/settings/permissoes")
 def obter_permissoes(usuario: dict = Depends(obter_usuario_atual)):
-    context = workspace_service.get_current_workspace_context(usuario)
-    role_map = {
-        "owner": "admin",
-        "admin": "admin",
-        "supervisor": "supervisor",
-        "seller": "vendedor",
-        "member": "user",
-    }
-    return settings_service.permissoes_do_perfil(role_map.get(context.get("workspaceRole"), usuario.get("perfil") or "user"))
+    from app.core.permissions import perfil_efetivo
+
+    return settings_service.permissoes_do_perfil(perfil_efetivo(usuario))
 
 
 @router.post("/settings/alterar-senha")

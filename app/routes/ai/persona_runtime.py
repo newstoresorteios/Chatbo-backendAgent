@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.core.auth import obter_usuario_atual
+from app.core.permissions import requer_permissao
 from app.schemas.ai.common import FlexibleModel
 from app.services.ai.resources import (
     instruction_extensions_service,
@@ -36,7 +37,10 @@ def listar_persona_versions(
 
 
 @router.post("/persona-versions")
-def criar_persona_version(body: FlexibleModel, usuario: dict = Depends(obter_usuario_atual)):
+def criar_persona_version(
+    body: FlexibleModel,
+    usuario: dict = Depends(requer_permissao("managePlatform")),
+):
     return persona_versions_service.criar(usuario, body.to_db())
 
 
@@ -44,7 +48,7 @@ def criar_persona_version(body: FlexibleModel, usuario: dict = Depends(obter_usu
 def atualizar_persona_version(
     record_id: int,
     body: FlexibleModel,
-    usuario: dict = Depends(obter_usuario_atual),
+    usuario: dict = Depends(requer_permissao("managePlatform")),
 ):
     payload = body.to_db(exclude_none=True)
     status = payload.get("status")
@@ -77,7 +81,10 @@ def listar_instruction_extensions(
 
 
 @router.post("/instruction-extensions")
-def criar_instruction_extension(body: FlexibleModel, usuario: dict = Depends(obter_usuario_atual)):
+def criar_instruction_extension(
+    body: FlexibleModel,
+    usuario: dict = Depends(requer_permissao("managePlatform")),
+):
     return instruction_extensions_service.criar(usuario, body.to_db())
 
 
@@ -85,7 +92,7 @@ def criar_instruction_extension(body: FlexibleModel, usuario: dict = Depends(obt
 def atualizar_instruction_extension(
     record_id: int,
     body: FlexibleModel,
-    usuario: dict = Depends(obter_usuario_atual),
+    usuario: dict = Depends(requer_permissao("managePlatform")),
 ):
     return instruction_extensions_service.atualizar(
         usuario, record_id, body.to_db(exclude_none=True)
