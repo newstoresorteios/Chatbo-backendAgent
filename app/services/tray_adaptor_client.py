@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 from urllib.parse import urljoin
 
 import httpx
@@ -25,9 +26,12 @@ def _extract_items(payload: Any, *keys: str) -> list[dict]:
                     continue
                 # Tray often wraps: { "Order": {...} }
                 nested = next(
-                    (item[k] for k in item if isinstance(item.get(k), dict) and k.lower() in {
-                        "order", "customer", "product", "variant"
-                    }),
+                    (
+                        item[k]
+                        for k in item
+                        if isinstance(item.get(k), dict)
+                        and k.lower() in {"order", "customer", "product", "variant"}
+                    ),
                     None,
                 )
                 items.append(nested if isinstance(nested, dict) else item)
@@ -40,6 +44,52 @@ def _extract_items(payload: Any, *keys: str) -> list[dict]:
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
     return []
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text or text.startswith("0000-00-00"):
+        return None
+    text = text.replace("Z", "+00:00")
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y",
+    ):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _row_date(row: dict, *keys: str) -> datetime | None:
+    for key in keys:
+        parsed = _parse_dt(row.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _in_period(row: dict, start: datetime, end: datetime, *keys: str) -> bool:
+    parsed = _row_date(row, *keys)
+    if parsed is None:
+        # Sem data confiável: mantém (evita descartar amostra útil)
+        return True
+    return start <= parsed <= end
 
 
 class TrayAdaptorClient:
@@ -75,44 +125,190 @@ class TrayAdaptorClient:
             except Exception:
                 return {"ok": True, "status_code": response.status_code}
 
-    def list_orders(self, *, page: int = 1, limit: int = 50) -> list[dict]:
-        payload = self._get("internal/orders", {"page": page, "limit": limit})
+    def list_orders(self, *, page: int = 1, limit: int = 50, **filters: Any) -> list[dict]:
+        params: dict[str, Any] = {"page": page, "limit": limit}
+        for key, value in filters.items():
+            if value is not None and value != "":
+                params[key] = value
+        payload = self._get("internal/orders", params)
         return _extract_items(payload, "Orders", "Order", "orders", "order")
 
-    def list_customers(self, *, page: int = 1, limit: int = 50) -> list[dict]:
-        payload = self._get("internal/customers", {"page": page, "limit": limit})
+    def list_customers(self, *, page: int = 1, limit: int = 50, **filters: Any) -> list[dict]:
+        params: dict[str, Any] = {"page": page, "limit": limit}
+        for key, value in filters.items():
+            if value is not None and value != "":
+                params[key] = value
+        payload = self._get("internal/customers", params)
         return _extract_items(payload, "Customers", "Customer", "customers", "customer")
 
-    def list_products(self, *, page: int = 1, limit: int = 50) -> list[dict]:
-        payload = self._get("internal/products", {"page": page, "limit": limit})
+    def list_products(self, *, page: int = 1, limit: int = 50, **filters: Any) -> list[dict]:
+        params: dict[str, Any] = {"page": page, "limit": limit}
+        for key, value in filters.items():
+            if value is not None and value != "":
+                params[key] = value
+        payload = self._get("internal/products", params)
         return _extract_items(payload, "Products", "Product", "products", "product")
 
+    def _paginate(
+        self,
+        fetcher: Callable[..., list[dict]],
+        *,
+        page_size: int,
+        max_pages: int,
+        filters: dict[str, Any] | None = None,
+        keep_row: Callable[[dict], bool] | None = None,
+        stop_when_older: Callable[[dict], bool] | None = None,
+    ) -> tuple[list[dict], int, dict[str, Any] | None]:
+        rows: list[dict] = []
+        pages = 0
+        filters = filters or {}
+        for page in range(1, max_pages + 1):
+            batch = fetcher(page=page, limit=page_size, **filters)
+            pages = page
+            if not batch:
+                break
+            older_streak = 0
+            for row in batch:
+                if keep_row is None or keep_row(row):
+                    rows.append(row)
+                    older_streak = 0
+                elif stop_when_older and stop_when_older(row):
+                    older_streak += 1
+                else:
+                    older_streak = 0
+            # Lista tipicamente do mais novo → antigo: para se a página inteira for antiga
+            if stop_when_older and batch and older_streak == len(batch) and rows:
+                break
+            if len(batch) < page_size:
+                break
+        return rows, pages, filters or None
+
+    def _paginate_with_filter_fallbacks(
+        self,
+        fetcher: Callable[..., list[dict]],
+        *,
+        page_size: int,
+        max_pages: int,
+        filter_candidates: list[dict[str, Any]],
+        keep_row: Callable[[dict], bool] | None = None,
+        stop_when_older: Callable[[dict], bool] | None = None,
+    ) -> tuple[list[dict], int, dict[str, Any] | None]:
+        candidates = list(filter_candidates) + [{}]
+        last_error: Exception | None = None
+        for filters in candidates:
+            try:
+                # Smoke-test page 1 with this filter set
+                fetcher(page=1, limit=min(page_size, 5), **filters)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Filtro Tray rejeitado %s: %s", filters, exc)
+                continue
+            return self._paginate(
+                fetcher,
+                page_size=page_size,
+                max_pages=max_pages,
+                filters=filters,
+                keep_row=keep_row,
+                stop_when_older=stop_when_older,
+            )
+        if last_error:
+            raise last_error
+        return [], 0, None
+
     def collect_sample(self, *, max_pages: int = 3, page_size: int = 50) -> dict[str, Any]:
-        orders: list[dict] = []
-        customers: list[dict] = []
-        products: list[dict] = []
-        for page in range(1, max_pages + 1):
-            batch = self.list_orders(page=page, limit=page_size)
-            orders.extend(batch)
-            if len(batch) < page_size:
-                break
-        for page in range(1, max_pages + 1):
-            batch = self.list_customers(page=page, limit=page_size)
-            customers.extend(batch)
-            if len(batch) < page_size:
-                break
-        for page in range(1, min(max_pages, 2) + 1):
-            batch = self.list_products(page=page, limit=page_size)
-            products.extend(batch)
-            if len(batch) < page_size:
-                break
+        """Compat: amostra curta (legado). Prefira collect_period."""
+        return self.collect_period(period_days=30, max_pages=max_pages, page_size=page_size)
+
+    def collect_period(
+        self,
+        *,
+        period_days: int = 30,
+        page_size: int = 50,
+        max_pages: int = 40,
+        product_pages: int = 2,
+    ) -> dict[str, Any]:
+        """Carrega pedidos/clientes do período (padrão 30 dias) via TRAYadaptor."""
+        days = max(1, int(period_days or 30))
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        start_day = start.date().isoformat()
+        end_day = end.date().isoformat()
+
+        order_date_keys = ("date", "created", "modified", "payment_date", "created_at")
+        customer_date_keys = ("created", "modified", "registration_date", "last_purchase")
+
+        def keep_order(row: dict) -> bool:
+            return _in_period(row, start, end, *order_date_keys)
+
+        def older_order(row: dict) -> bool:
+            parsed = _row_date(row, *order_date_keys)
+            return parsed is not None and parsed < start
+
+        def keep_customer(row: dict) -> bool:
+            return _in_period(row, start, end, *customer_date_keys)
+
+        def older_customer(row: dict) -> bool:
+            parsed = _row_date(row, *customer_date_keys)
+            return parsed is not None and parsed < start
+
+        order_filter_candidates = [
+            {"date": f"{start_day},{end_day}"},
+            {"createdStart": start_day, "createdEnd": end_day},
+            {"created": start_day},
+            {"modified": start_day},
+        ]
+        customer_filter_candidates = [
+            {"createdStart": start_day, "createdEnd": end_day},
+            {"created": start_day},
+            {"modified": start_day},
+        ]
+
+        orders, order_pages, order_filters_used = self._paginate_with_filter_fallbacks(
+            self.list_orders,
+            page_size=page_size,
+            max_pages=max_pages,
+            filter_candidates=order_filter_candidates,
+            keep_row=keep_order,
+            stop_when_older=older_order,
+        )
+        customers, customer_pages, customer_filters_used = self._paginate_with_filter_fallbacks(
+            self.list_customers,
+            page_size=page_size,
+            max_pages=max_pages,
+            filter_candidates=customer_filter_candidates,
+            keep_row=keep_customer,
+            stop_when_older=older_customer,
+        )
+        products, product_pages_fetched, _ = self._paginate(
+            self.list_products,
+            page_size=page_size,
+            max_pages=product_pages,
+            filters=None,
+        )
+
         return {
             "orders": orders,
             "customers": customers,
             "products": products,
+            "period": {
+                "days": days,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "startDate": start_day,
+                "endDate": end_day,
+            },
             "pagesFetched": {
-                "orders": min(max_pages, max(1, (len(orders) + page_size - 1) // page_size)),
-                "customers": min(max_pages, max(1, (len(customers) + page_size - 1) // page_size)),
-                "products": min(2, max(1, (len(products) + page_size - 1) // page_size)),
+                "orders": order_pages,
+                "customers": customer_pages,
+                "products": product_pages_fetched,
+            },
+            "filtersUsed": {
+                "orders": order_filters_used or {},
+                "customers": customer_filters_used or {},
+            },
+            "rawCounts": {
+                "ordersInPeriod": len(orders),
+                "customersInPeriod": len(customers),
+                "products": len(products),
             },
         }

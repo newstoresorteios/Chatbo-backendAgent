@@ -393,7 +393,12 @@ class CommercialBiService:
 
         try:
             client = workspace_integration_service.client_from_workspace(workspace_id)
-            sample = client.collect_sample(max_pages=3, page_size=50)
+            sample = client.collect_period(
+                period_days=period_days,
+                page_size=50,
+                max_pages=40,
+                product_pages=2,
+            )
             phones, emails, active, waiting = self._chatbo_contacts(workspace_id)
             attributed = self._attribute_orders(sample["orders"], phones, emails)
             kpis = self._build_kpis(
@@ -415,6 +420,7 @@ class CommercialBiService:
             insight_context = {
                 "kpis": kpis,
                 "attribution": attribution,
+                "period": sample.get("period"),
                 "sampleOrders": attributed[:30],
                 "sampleProducts": entities["products"][:20],
                 "activeConversations": active,
@@ -423,6 +429,9 @@ class CommercialBiService:
             source_meta = {
                 "adapterBaseUrl": getattr(client, "base_url", ""),
                 "pagesFetched": sample.get("pagesFetched"),
+                "period": sample.get("period"),
+                "filtersUsed": sample.get("filtersUsed"),
+                "rawCounts": sample.get("rawCounts"),
                 "ordersSample": len(sample["orders"]),
                 "customersSample": len(sample["customers"]),
                 "productsSample": len(sample["products"]),
