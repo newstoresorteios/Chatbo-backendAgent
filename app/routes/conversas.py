@@ -83,6 +83,7 @@ def send_mensagem(
         body.sender,
         workspace_id=workspace_id_from_context(context),
         actor_user_id=payload.get("sub"),
+        actor_name=_actor_name(payload),
     )
 
 

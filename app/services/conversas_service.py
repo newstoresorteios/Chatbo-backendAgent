@@ -101,6 +101,21 @@ def _merge_mensagens(mapped: list[dict], transcript: list[dict]) -> list[dict]:
     return sorted(items, key=lambda m: m.get("timestamp") or "")
 
 
+def _format_atendente_outbound(actor_name: str | None, content: str) -> str:
+    """Formato WhatsApp: 'Felipe:\\nBoa Noite!'."""
+    body = (content or "").strip()
+    name = (actor_name or "").strip()
+    if not body:
+        return body
+    if not name:
+        return body
+    prefix = f"{name}:"
+    if body.lower().startswith(prefix.lower()):
+        rest = body[len(prefix) :].lstrip(" \n")
+        return f"{prefix}\n{rest}" if rest else prefix
+    return f"{prefix}\n{body}"
+
+
 class ConversasService:
 
     def __init__(self):
@@ -230,6 +245,7 @@ class ConversasService:
         sender: str = "agent",
         workspace_id: str | None = None,
         actor_user_id: str | None = None,
+        actor_name: str | None = None,
     ) -> dict:
         if sender not in {"customer", "agent", "ai"}:
             sender = "agent"
@@ -248,21 +264,33 @@ class ConversasService:
                     detail="Assuma a conversa antes de enviar mensagens ao cliente",
                 )
 
+        outbound_text = content.strip()
+        if sender == "agent":
+            name = (actor_name or "").strip()
+            if not name and actor_user_id:
+                user = self._users_index().get(str(actor_user_id))
+                name = (user or {}).get("name") or ""
+            outbound_text = _format_atendente_outbound(name, outbound_text)
+
         mensagem = self.mensagens.criar({
             "conversa_id": conversa_id,
-            "content": content.strip(),
+            "content": outbound_text,
             "sender": sender,
             "status": "sent",
             "direction": "outbound",
         })
 
+        conv_patch = {
+            "last_message": outbound_text,
+            "last_message_at": datetime.utcnow().isoformat(),
+            "unread_count": 0,
+        }
+        if sender == "agent":
+            # Garante que o NSAgent continue pausado enquanto o humano atende.
+            conv_patch["bot_activated"] = False
         self.conversas.atualizar(
             conversa_id,
-            {
-                "last_message": content.strip(),
-                "last_message_at": datetime.utcnow().isoformat(),
-                "unread_count": 0,
-            },
+            conv_patch,
             workspace_id=workspace_id,
         )
 
@@ -282,7 +310,7 @@ class ConversasService:
                     "brevoStatus": brevo_outbound_service.status(),
                 }
             else:
-                delivery = brevo_outbound_service.enviar_para_conversa(conversa, content.strip())
+                delivery = brevo_outbound_service.enviar_para_conversa(conversa, outbound_text)
                 delivery["brevoStatus"] = brevo_outbound_service.status()
 
             if mensagem.get("id"):
@@ -324,6 +352,8 @@ class ConversasService:
         assignee_id: str,
         actor_name: str,
         workspace_id: str | None = None,
+        *,
+        assumindo: bool = False,
     ) -> dict:
         self._obter_conversa(conversa_id, workspace_id=workspace_id)
         assignee = self._usuario_ativo(assignee_id)
@@ -335,12 +365,24 @@ class ConversasService:
                 "assigned_to": assignee["id"],
                 "department": department,
                 "status": "active",
+                # Pausa o NSAgent / robô local enquanto houver atendente humano.
+                "bot_activated": False,
             },
             workspace_id=workspace_id,
         )
+        if assumindo:
+            event = (
+                f"[Sistema] {assignee['name']} iniciou o atendimento "
+                f"({department}). O agente automático foi pausado."
+            )
+        else:
+            event = (
+                f"[Sistema] Atendimento transferido para {assignee['name']} "
+                f"({department}) por {actor_name}. O agente automático permanece pausado."
+            )
         self._registrar_evento(
             conversa_id,
-            f"[Sistema] Atendimento transferido para {assignee['name']} ({department}) por {actor_name}.",
+            event,
             workspace_id=workspace_id,
         )
         users = self._users_index()
@@ -356,7 +398,13 @@ class ConversasService:
         actor_name: str,
         workspace_id: str | None = None,
     ) -> dict:
-        return self.transferir(conversa_id, user_id, actor_name, workspace_id=workspace_id)
+        return self.transferir(
+            conversa_id,
+            user_id,
+            actor_name,
+            workspace_id=workspace_id,
+            assumindo=True,
+        )
 
     def encerrar(
         self,

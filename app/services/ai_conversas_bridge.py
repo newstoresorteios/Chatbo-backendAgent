@@ -157,7 +157,7 @@ class AiConversasBridge:
                 "last_message": str(last_text)[:500],
                 "last_message_at": last_at,
                 "protocol": f"AI-{datetime.utcnow().strftime('%Y%m%d')}-{str(key)[-4:]}",
-                "bot_activated": True,
+                "bot_activated": True,  # só em conversa nova; Assumir desliga
                 "department": "Agente",
             },
             workspace_id=workspace_id,
@@ -389,7 +389,12 @@ class AiConversasBridge:
                 "last_message_at": last_row.get("created_at") or datetime.utcnow().isoformat(),
                 "channel": _channel(sample),
                 "status": conversa.get("status") or "active",
-                "bot_activated": True,
+                # Não religa o bot se um humano já assumiu a conversa.
+                **(
+                    {}
+                    if conversa.get("assigned_to") or conversa.get("bot_activated") is False
+                    else {"bot_activated": True}
+                ),
             },
             workspace_id=workspace_id,
         )
@@ -437,8 +442,10 @@ class AiConversasBridge:
                     "last_message": str(last_text)[:500],
                     "last_message_at": last_row.get("created_at") or datetime.utcnow().isoformat(),
                     "channel": _channel(sample),
-                    "bot_activated": True,
                 }
+                # Não religa o bot se um humano já assumiu.
+                if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
+                    patch["bot_activated"] = True
                 conv_id = str(sample.get("conversation_id") or "").strip()
                 sender_key = str(sample.get("sender_key") or sample.get("sender_phone") or "").strip()
                 if conv_id:
