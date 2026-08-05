@@ -111,7 +111,24 @@ class SettingsService:
 
     def permissoes_do_perfil(self, role: str) -> dict:
         role_key = (role or "user").lower()
-        perms = ROLE_PERMISSIONS.get(role_key, ROLE_PERMISSIONS["user"])
+        base = ROLE_PERMISSIONS.get(role_key, ROLE_PERMISSIONS["user"])
+        # Cópia defensiva + garante chaves novas mesmo com cache/deploy parcial.
+        perms = {
+            "viewReports": False,
+            "viewFinancial": False,
+            "manageUsers": False,
+            "manageIntegrations": False,
+            "managePlatform": False,
+            "exportData": False,
+            **base,
+        }
+        if role_key == "admin":
+            perms = {key: True for key in perms}
+        elif role_key == "supervisor":
+            perms["viewFinancial"] = True
+            perms["viewReports"] = True
+            perms["managePlatform"] = True
+            perms["manageIntegrations"] = True
         return {
             "role": role_key,
             "permissions": perms,

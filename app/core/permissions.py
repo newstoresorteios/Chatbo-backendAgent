@@ -11,6 +11,13 @@ WORKSPACE_ROLE_TO_PERFIL = {
     "member": "user",
 }
 
+_PERFIL_RANK = {
+    "user": 0,
+    "vendedor": 1,
+    "supervisor": 2,
+    "admin": 3,
+}
+
 
 def tem_permissao(role: str | None, chave: str) -> bool:
     role_key = (role or "user").strip().lower()
@@ -19,17 +26,23 @@ def tem_permissao(role: str | None, chave: str) -> bool:
 
 
 def perfil_efetivo(usuario: dict) -> str:
-    """Resolve perfil de permissão a partir do papel no workspace (company)."""
-    from app.services.workspace_service import workspace_service
+    """Usa o maior privilégio entre perfil JWT e papel no workspace."""
+    candidates = [(usuario.get("perfil") or "user").strip().lower()]
 
     try:
+        from app.services.workspace_service import workspace_service
+
         context = workspace_service.get_current_workspace_context(usuario)
         mapped = WORKSPACE_ROLE_TO_PERFIL.get(context.get("workspaceRole") or "")
         if mapped:
-            return mapped
+            candidates.append(mapped)
+        # System admin da plataforma sempre opera como admin no console de empresa.
+        if (usuario.get("account_type") or "") == "system_admin":
+            candidates.append("admin")
     except Exception:
         pass
-    return (usuario.get("perfil") or "user").strip().lower()
+
+    return max(candidates, key=lambda role: _PERFIL_RANK.get(role, 0))
 
 
 def requer_permissao(chave: str):

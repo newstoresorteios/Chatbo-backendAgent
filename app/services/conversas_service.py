@@ -133,8 +133,29 @@ class ConversasService:
         return [_map_conversa(row, users) for row in rows]
 
     def listar_mensagens(self, conversa_id: str, workspace_id: str | None = None) -> list[dict]:
-        if not self.conversas.obter(conversa_id, workspace_id=workspace_id):
+        conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
+        if not conversa and workspace_id:
+            # Conversas legadas / sync sem workspace no filtro.
+            conversa = self.conversas.obter(conversa_id, workspace_id=None)
+        if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+        # New Store / NSAgent: materializa ai_inbound_messages + ai_agent_responses nesta conversa.
+        try:
+            from app.services.ai_conversas_bridge import ai_conversas_bridge
+
+            written = ai_conversas_bridge.sync_messages_for_conversa(
+                conversa,
+                workspace_id or conversa.get("workspace_id"),
+            )
+            if written:
+                logger.info(
+                    "Inbox sync mensagens: %s nova(s) na conversa %s",
+                    written,
+                    conversa_id,
+                )
+        except Exception as exc:
+            logger.warning("Sync mensagens AI falhou para %s: %s", conversa_id, exc)
 
         rows = self.mensagens.listar_por_conversa(conversa_id)
         return [_map_mensagem(row) for row in rows]
