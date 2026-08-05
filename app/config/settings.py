@@ -139,6 +139,7 @@ elif BREVO_SEND_URL and BREVO_SEND_URL.rstrip("/") == "https://api.brevo.com/v3"
 # Publicação da persona ChatBô → NSAgent (ai_agent_persona_versions)
 NSAGENT_PERSONA_TENANT_ID = _clean_env(os.getenv("NSAGENT_PERSONA_TENANT_ID")) or "newstore"
 NSAGENT_PERSONA_KEY = _clean_env(os.getenv("NSAGENT_PERSONA_KEY")) or "newstore_commercial"
+PERSONA_KNOWLEDGE_BUCKET = _clean_env(os.getenv("PERSONA_KNOWLEDGE_BUCKET")) or "persona-knowledge"
 
 # ETL agendado (Render Cron) — sync Mercos → Supabase sem sobrecarregar a API
 ETL_CRON_SECRET = os.getenv("ETL_CRON_SECRET", "")

@@ -83,7 +83,38 @@ def _examples_block(value: Any) -> str:
     return "\n\n".join(chunks)
 
 
-def compile_instructions(persona: dict) -> str:
+KNOWLEDGE_TOTAL_CAP = 24_000
+
+
+def _knowledge_block(docs: list[dict] | None) -> str:
+    if not docs:
+        return ""
+    chunks: list[str] = []
+    used = 0
+    for idx, doc in enumerate(docs, start=1):
+        name = _clean(doc.get("filename") or doc.get("name")) or f"Documento {idx}"
+        body = _clean(doc.get("extracted_text") or doc.get("text"))
+        if not body:
+            continue
+        remaining = KNOWLEDGE_TOTAL_CAP - used
+        if remaining <= 200:
+            chunks.append("[… documentos adicionais omitidos por limite de tamanho …]")
+            break
+        if len(body) > remaining:
+            body = body[:remaining] + "\n[… truncado …]"
+        chunk = f"### {name}\n{body}"
+        chunks.append(chunk)
+        used += len(chunk)
+    if not chunks:
+        return ""
+    return (
+        "Base de conhecimento aprovada (use estes documentos como referência factual; "
+        "não invente o que não estiver aqui nem em ferramentas):\n\n"
+        + "\n\n".join(chunks)
+    )
+
+
+def compile_instructions(persona: dict, knowledge_docs: list[dict] | None = None) -> str:
     """Converte campos estruturados do ChatBô em instructions do NSAgent."""
     name = _clean(persona.get("name")) or "Agente comercial"
     role = _clean(persona.get("role")) or "assistente comercial"
@@ -170,6 +201,10 @@ def compile_instructions(persona: dict) -> str:
     if examples:
         parts.append("Exemplos de diálogo (estilo, não copie literalmente se o contexto for outro):\n" + examples)
 
+    knowledge = _knowledge_block(knowledge_docs)
+    if knowledge:
+        parts.append(knowledge)
+
     text = "\n\n".join(parts).strip()
     for pattern in _VOLATILE:
         text = pattern.sub("[dado dinâmico — consulte ferramentas]", text)
@@ -185,6 +220,19 @@ class NsAgentPersonaBridge:
     ) -> None:
         self.tenant_id = (tenant_id or NSAGENT_PERSONA_TENANT_ID or "newstore").strip()
         self.persona_key = (persona_key or NSAGENT_PERSONA_KEY or "newstore_commercial").strip()
+
+    def _load_knowledge_docs(self, persona: dict) -> list[dict]:
+        persona_id = str(persona.get("id") or "").strip()
+        workspace_id = str(persona.get("workspace_id") or "").strip()
+        if not persona_id or not workspace_id:
+            return []
+        try:
+            from app.repositories.persona_attachment_repository import PersonaAttachmentRepository
+
+            return PersonaAttachmentRepository().listar_processados(persona_id, workspace_id)
+        except Exception as exc:
+            logger.warning("Não foi possível carregar anexos da persona %s: %s", persona_id, exc)
+            return []
 
     def _next_version(self) -> int:
         rows = (
@@ -222,7 +270,8 @@ class NsAgentPersonaBridge:
 
     def publish_active(self, persona: dict, *, activated_by: str | None = None) -> dict:
         """Cria nova versão ativa no formato do NSAgent."""
-        instructions = compile_instructions(persona)
+        knowledge_docs = self._load_knowledge_docs(persona)
+        instructions = compile_instructions(persona, knowledge_docs)
         if len(instructions) < 40:
             raise ValueError("instructions_too_short")
 
@@ -247,6 +296,7 @@ class NsAgentPersonaBridge:
                 "chatboWorkspaceId": str(persona.get("workspace_id") or ""),
                 "chatboVersion": int(persona.get("version") or 1),
                 "publishedFrom": "chatbo-backendAgent",
+                "knowledgeDocs": len(knowledge_docs),
             },
         }
         created = (

@@ -42,4 +42,6 @@ urllib3==2.7.0
 uvicorn==0.49.0
 websockets==15.0.1
 yarl==1.24.2
+pypdf==5.9.0
+python-multipart==0.0.20
 pytest==8.4.1

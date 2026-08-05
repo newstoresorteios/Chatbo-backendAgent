@@ -23,3 +23,25 @@ def test_compile_instructions_includes_core_fields():
     assert "Qualificar lead" in text
     assert "Não inventar preço" in text
     assert "Tem relógio?" in text
+
+
+def test_compile_instructions_includes_knowledge_docs():
+    text = compile_instructions(
+        {
+            "name": "Felipe Bot",
+            "role": "consultor",
+            "greeting": "Olá",
+            "tone": "objetivo",
+        },
+        knowledge_docs=[
+            {
+                "filename": "faq-frete.txt",
+                "extracted_text": "Frete grátis acima de R$ 500 para SP capital.",
+            }
+        ],
+    )
+    assert "Base de conhecimento aprovada" in text
+    assert "faq-frete.txt" in text
+    assert "Frete grátis" in text
+    # preço volátil deve ser scrubado
+    assert "R$" not in text or "[dado dinâmico" in text
