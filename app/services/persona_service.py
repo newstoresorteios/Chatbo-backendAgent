@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Any, Callable
 
@@ -7,6 +8,7 @@ from app.repositories.persona_repository import PersonaRepository
 from app.services.openai_provider import call_openai_resilient
 from app.services.workspace_service import WORKSPACE_ADMIN_ROLES, workspace_service
 
+logger = logging.getLogger(__name__)
 PERSONA_VIEW_ROLES = {"owner", "admin", "supervisor"}
 REQUIRED_ACTIVATION_FIELDS = {
     "name": "name",
@@ -207,6 +209,30 @@ class PersonaService:
             raise HTTPException(status_code=404, detail="Persona não encontrada.")
         return self._response(persona)
 
+    def _publish_to_nsagent(self, persona: dict, *, user_id: str | None) -> dict:
+        from app.services.nsagent_persona_bridge import nsagent_persona_bridge
+
+        try:
+            return nsagent_persona_bridge.publish_active(persona, activated_by=user_id)
+        except Exception as exc:
+            logger.exception("Falha ao publicar persona no NSAgent: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Não foi possível publicar a persona no NSAgent "
+                    f"({type(exc).__name__}: {exc}). A ativação no ChatBô foi cancelada."
+                ),
+            ) from exc
+
+    def _archive_on_nsagent(self) -> dict | None:
+        from app.services.nsagent_persona_bridge import nsagent_persona_bridge
+
+        try:
+            return nsagent_persona_bridge.archive_active()
+        except Exception as exc:
+            logger.warning("Falha ao arquivar persona no NSAgent: %s", exc)
+            return {"published": False, "error": str(exc)}
+
     def atualizar(self, usuario: dict, persona_id: str, payload: dict) -> dict:
         context = self._context(usuario)
         self._require_admin(context, "Você não possui permissão para alterar esta persona.")
@@ -222,7 +248,12 @@ class PersonaService:
             "updated_by": str(usuario.get("id")),
         })
         self._snapshot(updated, "updated", str(usuario.get("id")))
-        return self._response(updated)
+        response = self._response(updated)
+        # Se já está ativa, republica no NSAgent para o atendimento usar a versão nova.
+        if updated.get("status") == "active":
+            publish = self._publish_to_nsagent(updated, user_id=str(usuario.get("id")))
+            response["nsAgentPublish"] = publish
+        return response
 
     def _missing_activation_fields(self, persona: dict) -> list[str]:
         missing = []
@@ -241,8 +272,7 @@ class PersonaService:
         persona = self.repo.buscar_por_id_workspace(persona_id, context["workspaceId"])
         if not persona:
             raise HTTPException(status_code=404, detail="Persona não encontrada.")
-        if persona.get("status") == "active":
-            return self._response(persona)
+
         missing = self._missing_activation_fields(persona)
         if missing:
             raise HTTPException(
@@ -251,6 +281,23 @@ class PersonaService:
             )
 
         user_id = str(usuario.get("id"))
+
+        if persona.get("status") == "active":
+            # Republica no NSAgent (idempotente para recuperação).
+            draft_for_publish = {**persona, "version": int(persona.get("version") or 1) + 1}
+            publish = self._publish_to_nsagent(draft_for_publish, user_id=user_id)
+            response = self._response(persona)
+            response["nsAgentPublish"] = publish
+            return response
+
+        # Publica primeiro no NSAgent; só então marca ativa no ChatBô.
+        publish_source = {
+            **persona,
+            "version": int(persona.get("version") or 1) + 1,
+            "status": "active",
+        }
+        publish = self._publish_to_nsagent(publish_source, user_id=user_id)
+
         current_active = self.repo.buscar_ativa(context["workspaceId"])
         if current_active and current_active.get("id") != persona_id:
             deactivated = self.repo.atualizar(str(current_active.get("id")), context["workspaceId"], {
@@ -270,7 +317,9 @@ class PersonaService:
             "deactivated_at": None,
         })
         self._snapshot(activated, "activated", user_id)
-        return self._response(activated)
+        response = self._response(activated)
+        response["nsAgentPublish"] = publish
+        return response
 
     def desativar(self, usuario: dict, persona_id: str) -> dict:
         context = self._context(usuario)
@@ -288,7 +337,10 @@ class PersonaService:
             "deactivated_at": datetime.utcnow().isoformat(),
         })
         self._snapshot(updated, "deactivated", user_id)
-        return self._response(updated)
+        archive = self._archive_on_nsagent()
+        response = self._response(updated)
+        response["nsAgentPublish"] = archive
+        return response
 
     def listar_versoes(self, usuario: dict, persona_id: str) -> list[dict]:
         context = self._context(usuario)
