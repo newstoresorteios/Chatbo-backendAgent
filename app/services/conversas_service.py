@@ -158,7 +158,31 @@ class ConversasService:
             logger.warning("Sync mensagens AI falhou para %s: %s", conversa_id, exc)
 
         rows = self.mensagens.listar_por_conversa(conversa_id)
-        return [_map_mensagem(row) for row in rows]
+        mapped = [_map_mensagem(row) for row in rows]
+
+        # Sempre mescla o transcript do NSAgent (evita chat “vazio” ou só com mensagens locais).
+        try:
+            from app.services.ai_conversas_bridge import ai_conversas_bridge
+
+            transcript = ai_conversas_bridge.transcript_for_conversa(conversa)
+            if transcript:
+                by_key: dict[str, dict] = {}
+                for msg in mapped:
+                    key = str(msg.get("id") or "")
+                    if key:
+                        by_key[key] = msg
+                for msg in transcript:
+                    key = str(msg.get("id") or "")
+                    if key and key not in by_key:
+                        by_key[key] = msg
+                    elif key:
+                        # Prefer content do NSAgent para ids ai-*
+                        by_key[key] = msg
+                return sorted(by_key.values(), key=lambda m: m.get("timestamp") or "")
+        except Exception as exc:
+            logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
+
+        return mapped
 
     def enviar_mensagem(
         self,
@@ -166,6 +190,7 @@ class ConversasService:
         content: str,
         sender: str = "agent",
         workspace_id: str | None = None,
+        actor_user_id: str | None = None,
     ) -> dict:
         if sender not in {"customer", "agent", "ai"}:
             sender = "agent"
@@ -175,6 +200,14 @@ class ConversasService:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
         if conversa.get("status") == "closed":
             raise HTTPException(status_code=400, detail="Conversa encerrada — reabra para enviar mensagens")
+
+        if sender == "agent":
+            assigned = str(conversa.get("assigned_to") or "")
+            if not actor_user_id or assigned != str(actor_user_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Assuma a conversa antes de enviar mensagens ao cliente",
+                )
 
         mensagem = self.mensagens.criar({
             "conversa_id": conversa_id,
@@ -194,14 +227,40 @@ class ConversasService:
             workspace_id=workspace_id,
         )
 
+        delivery: dict = {"sent": False}
         if sender in {"agent", "ai"}:
+            from app.services.brevo_outbound_service import brevo_outbound_service
             from app.services.whatsapp_service import whatsapp_service
 
-            whatsapp_service.enviar_para_conversa(
-                conversa,
-                content.strip(),
-                str(mensagem.get("id")),
-            )
+            # New Store: prioriza Brevo (mesmo caminho do NSAgent).
+            if brevo_outbound_service.configurado():
+                delivery = brevo_outbound_service.enviar_para_conversa(conversa, content.strip())
+            if not delivery.get("sent"):
+                meta = whatsapp_service.enviar_para_conversa(
+                    conversa,
+                    content.strip(),
+                    str(mensagem.get("id")),
+                )
+                if meta.get("sent"):
+                    delivery = meta
+                elif not delivery.get("reason"):
+                    delivery = meta
+
+            if mensagem.get("id"):
+                self.mensagens.atualizar(
+                    str(mensagem["id"]),
+                    {
+                        "status": "sent" if delivery.get("sent") else "failed",
+                        "provider_status": "sent" if delivery.get("sent") else "failed",
+                    },
+                )
+
+            if not delivery.get("sent"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=delivery.get("reason")
+                    or "Não foi possível entregar a mensagem ao cliente",
+                )
         elif sender == "customer":
             try:
                 from app.services.chatbot_service import chatbot_service
@@ -211,7 +270,9 @@ class ConversasService:
             except Exception as exc:
                 logger.warning("Chatbot runtime falhou: %s", exc)
 
-        return _map_mensagem(mensagem)
+        mapped = _map_mensagem(mensagem)
+        mapped["delivery"] = delivery
+        return mapped
 
     def transferir(
         self,

@@ -20,17 +20,24 @@ class MensagemRepository:
         return rows[0] if rows else dados
 
     def existe_external_id(self, external_id: str) -> bool:
+        return bool(self.obter_por_external_id(external_id))
+
+    def obter_por_external_id(self, external_id: str) -> dict | None:
         if not external_id:
-            return False
+            return None
         resposta = (
             supabase
             .table("mensagens")
-            .select("id")
+            .select("*")
             .eq("external_id", external_id)
             .limit(1)
             .execute()
         )
-        return bool(resposta.data)
+        rows = resposta.data or []
+        return rows[0] if rows else None
+
+    def reatribuir_conversa(self, mensagem_id: str, conversa_id: str) -> dict | None:
+        return self.atualizar(mensagem_id, {"conversa_id": conversa_id})
 
     def atualizar(self, mensagem_id: str, dados: dict) -> dict | None:
         resposta = (

@@ -108,7 +108,16 @@ class AiConversasBridge:
         return sorted(by_id.values(), key=lambda r: r.get("created_at") or "")
 
     def _ensure_conversa(self, workspace_id: str, key: str, sample: dict) -> dict:
-        existing = self.conversas.obter_por_contato(key, workspace_id=workspace_id)
+        conversation_id = str(sample.get("conversation_id") or "").strip() or key
+        sender_key = str(
+            sample.get("sender_key") or sample.get("sender_phone") or key
+        ).strip()
+
+        existing = (
+            self.conversas.obter_por_contato(conversation_id, workspace_id=workspace_id)
+            or self.conversas.obter_por_contato(sender_key, workspace_id=workspace_id)
+            or self.conversas.obter_por_contato(key, workspace_id=workspace_id)
+        )
         name = (
             sample.get("sender_name")
             or sample.get("sender_username")
@@ -119,12 +128,28 @@ class AiConversasBridge:
         last_at = sample.get("created_at") or datetime.utcnow().isoformat()
 
         if existing:
+            # Enriquece chaves para o próximo sync de mensagens.
+            patch = {}
+            if conversation_id and not existing.get("external_thread_id"):
+                patch["external_thread_id"] = conversation_id
+            if sender_key and (
+                not existing.get("contact_phone")
+                or existing.get("contact_phone") == existing.get("external_thread_id")
+            ):
+                patch["contact_phone"] = sender_key
+            if patch:
+                updated = self.conversas.atualizar(
+                    str(existing["id"]),
+                    patch,
+                    workspace_id=workspace_id,
+                )
+                return updated or {**existing, **patch}
             return existing
 
         return self.conversas.criar(
             {
-                "external_thread_id": key,
-                "contact_phone": key,
+                "external_thread_id": conversation_id,
+                "contact_phone": sender_key,
                 "customer_name": name,
                 "channel": channel,
                 "status": "active",
@@ -138,11 +163,41 @@ class AiConversasBridge:
             workspace_id=workspace_id,
         )
 
+    def _persist_message(self, conversa_id: str, external_id: str | None, payload: dict, workspace_id: str) -> bool:
+        if external_id:
+            existing = self.mensagens.obter_por_external_id(external_id)
+            if existing:
+                if str(existing.get("conversa_id")) != str(conversa_id):
+                    self.mensagens.reatribuir_conversa(str(existing["id"]), conversa_id)
+                    return True
+                return False
+
+        stamped = stamp_workspace({**payload, "conversa_id": conversa_id, "external_id": external_id}, workspace_id)
+        try:
+            created = self.mensagens.criar(stamped)
+            # Confirma persistência (RLS às vezes “aceita” sem gravar).
+            if external_id and not self.mensagens.obter_por_external_id(external_id):
+                if created.get("id"):
+                    check = self.mensagens.listar_por_conversa(conversa_id)
+                    if not any(str(m.get("id")) == str(created.get("id")) for m in check):
+                        logger.warning("Mensagem %s não persistiu em mensagens", external_id)
+                        return False
+            return True
+        except Exception as exc:
+            if "workspace_id" in str(exc).lower():
+                stamped.pop("workspace_id", None)
+                try:
+                    self.mensagens.criar(stamped)
+                    return True
+                except Exception as exc2:
+                    logger.warning("Falha ao gravar %s: %s", external_id, exc2)
+                    return False
+            logger.warning("Falha ao gravar %s: %s", external_id, exc)
+            return False
+
     def _upsert_inbound(self, conversa_id: str, row: dict, workspace_id: str) -> bool:
         inbound_id = row.get("id")
         external_id = f"ai-in-{inbound_id}" if inbound_id is not None else None
-        if external_id and self.mensagens.existe_external_id(external_id):
-            return False
         text = str(row.get("text") or "").strip()
         if not text:
             meta = row.get("channel_metadata") or {}
@@ -152,70 +207,145 @@ class AiConversasBridge:
                 text = f"[{meta.get('input_modality')}]"
             else:
                 return False
-        payload = stamp_workspace(
+        return self._persist_message(
+            conversa_id,
+            external_id,
             {
-                "conversa_id": conversa_id,
                 "content": text,
                 "sender": "customer",
                 "status": "delivered",
                 "direction": "inbound",
-                "external_id": external_id,
                 "provider_status": "received",
                 "created_at": row.get("created_at") or datetime.utcnow().isoformat(),
             },
             workspace_id,
         )
-        try:
-            self.mensagens.criar(payload)
-            return True
-        except Exception as exc:
-            # Retry sem workspace_id caso a coluna não exista em mensagens.
-            if "workspace_id" in str(exc).lower():
-                payload.pop("workspace_id", None)
-                try:
-                    self.mensagens.criar(payload)
-                    return True
-                except Exception as exc2:
-                    logger.warning("Falha ao gravar inbound %s: %s", external_id, exc2)
-                    return False
-            logger.warning("Falha ao gravar inbound %s: %s", external_id, exc)
-            return False
 
     def _upsert_response(self, conversa_id: str, row: dict, workspace_id: str) -> bool:
         response_id = row.get("id")
         external_id = f"ai-out-{response_id}" if response_id is not None else None
-        if external_id and self.mensagens.existe_external_id(external_id):
-            return False
         text = str(row.get("reply_text") or "").strip()
         if not text:
             return False
-        payload = stamp_workspace(
+        return self._persist_message(
+            conversa_id,
+            external_id,
             {
-                "conversa_id": conversa_id,
                 "content": text,
                 "sender": "ai",
                 "status": "sent",
                 "direction": "outbound",
-                "external_id": external_id,
                 "provider_status": "sent" if row.get("provider_send_ok") else "failed",
                 "created_at": row.get("created_at") or datetime.utcnow().isoformat(),
             },
             workspace_id,
         )
-        try:
-            self.mensagens.criar(payload)
-            return True
-        except Exception as exc:
-            if "workspace_id" in str(exc).lower():
-                payload.pop("workspace_id", None)
-                try:
-                    self.mensagens.criar(payload)
-                    return True
-                except Exception as exc2:
-                    logger.warning("Falha ao gravar response %s: %s", external_id, exc2)
-                    return False
-            logger.warning("Falha ao gravar response %s: %s", external_id, exc)
-            return False
+
+    def _expand_keys_from_preview(self, conversa: dict, keys: list[str]) -> list[str]:
+        preview = str(conversa.get("last_message") or "").strip()
+        if len(preview) < 12:
+            return keys
+        needle = preview[:48].replace("%", "")
+        expanded = list(keys)
+        for table, column in (
+            ("ai_agent_responses", "reply_text"),
+            ("ai_inbound_messages", "text"),
+        ):
+            try:
+                rows = (
+                    supabase.table(table)
+                    .select("*")
+                    .ilike(column, f"%{needle}%")
+                    .order("created_at", desc=True)
+                    .limit(5)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as exc:
+                logger.warning("Preview lookup %s falhou: %s", table, exc)
+                continue
+            for row in rows:
+                for field in ("conversation_id", "sender_key", "sender_phone", "visitor_id"):
+                    value = row.get(field)
+                    if value is not None and str(value).strip() and str(value).strip() not in expanded:
+                        expanded.append(str(value).strip())
+                # responses: resolve via inbound_id
+                inbound_id = row.get("inbound_id")
+                if inbound_id is not None:
+                    for inbound in self._query_ai("ai_inbound_messages", "id", str(inbound_id), limit=1):
+                        for field in ("conversation_id", "sender_key", "sender_phone", "visitor_id"):
+                            value = inbound.get(field)
+                            if value is not None and str(value).strip() and str(value).strip() not in expanded:
+                                expanded.append(str(value).strip())
+        return expanded
+
+    def _load_thread_rows(self, conversa: dict) -> tuple[list[dict], list[dict]]:
+        keys = _identity_keys(conversa)
+        keys = self._expand_keys_from_preview(conversa, keys)
+        if not keys:
+            return [], []
+
+        inbounds = self._fetch_inbounds_for_keys(keys)
+        extra = list(keys)
+        for row in inbounds:
+            for field in ("conversation_id", "sender_key", "sender_phone", "visitor_id"):
+                value = row.get(field)
+                if value is not None and str(value).strip() and str(value).strip() not in extra:
+                    extra.append(str(value).strip())
+        if len(extra) > len(keys):
+            inbounds = self._fetch_inbounds_for_keys(extra)
+        responses = self._fetch_responses_for_keys(extra, [row.get("id") for row in inbounds])
+        return inbounds, responses
+
+    def transcript_for_conversa(self, conversa: dict) -> list[dict]:
+        """Monta histórico direto das tabelas do NSAgent (fallback de exibição)."""
+        inbounds, responses = self._load_thread_rows(conversa)
+        conversa_id = str(conversa.get("id") or "")
+        events: list[tuple[str, dict]] = []
+
+        for row in inbounds:
+            text = str(row.get("text") or "").strip()
+            if not text:
+                meta = row.get("channel_metadata") or {}
+                if isinstance(meta, dict) and meta.get("image_url"):
+                    text = "[Imagem]"
+            if not text:
+                continue
+            events.append(
+                (
+                    str(row.get("created_at") or ""),
+                    {
+                        "id": f"ai-in-{row.get('id')}",
+                        "conversationId": conversa_id,
+                        "content": text,
+                        "sender": "customer",
+                        "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
+                        "status": "delivered",
+                    },
+                )
+            )
+
+        for row in responses:
+            text = str(row.get("reply_text") or "").strip()
+            if not text:
+                continue
+            events.append(
+                (
+                    str(row.get("created_at") or ""),
+                    {
+                        "id": f"ai-out-{row.get('id')}",
+                        "conversationId": conversa_id,
+                        "content": text,
+                        "sender": "ai",
+                        "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
+                        "status": "sent",
+                    },
+                )
+            )
+
+        events.sort(key=lambda item: item[0])
+        return [item[1] for item in events]
 
     def _sync_thread(
         self,
@@ -269,28 +399,12 @@ class AiConversasBridge:
         """Garante mensagens do NSAgent na conversa aberta (chamado no GET /mensagens)."""
         if not workspace_id or not conversa:
             return 0
-        keys = _identity_keys(conversa)
-        if not keys:
-            return 0
 
         conversa_id = str(conversa.get("id") or "")
         if not conversa_id:
             return 0
 
-        # Amplia chaves com conversation_id / sender_key encontrados nos inbounds.
-        inbounds = self._fetch_inbounds_for_keys(keys)
-        extra_keys = list(keys)
-        for row in inbounds:
-            for field in ("conversation_id", "sender_key", "sender_phone"):
-                value = row.get(field)
-                if value is not None and str(value).strip() and str(value).strip() not in extra_keys:
-                    extra_keys.append(str(value).strip())
-        if len(extra_keys) > len(keys):
-            inbounds = self._fetch_inbounds_for_keys(extra_keys)
-
-        inbound_ids = [row.get("id") for row in inbounds]
-        responses = self._fetch_responses_for_keys(extra_keys, inbound_ids)
-
+        inbounds, responses = self._load_thread_rows(conversa)
         written = 0
         try:
             for row in inbounds:
@@ -316,19 +430,22 @@ class AiConversasBridge:
                         or (last_response or {}).get("reply_text")
                         or ""
                     )
-                self.conversas.atualizar(
-                    conversa_id,
-                    {
-                        "customer_name": sample.get("sender_name")
-                        or sample.get("sender_username")
-                        or conversa.get("customer_name"),
-                        "last_message": str(last_text)[:500],
-                        "last_message_at": last_row.get("created_at") or datetime.utcnow().isoformat(),
-                        "channel": _channel(sample),
-                        "bot_activated": True,
-                    },
-                    workspace_id=workspace_id,
-                )
+                patch = {
+                    "customer_name": sample.get("sender_name")
+                    or sample.get("sender_username")
+                    or conversa.get("customer_name"),
+                    "last_message": str(last_text)[:500],
+                    "last_message_at": last_row.get("created_at") or datetime.utcnow().isoformat(),
+                    "channel": _channel(sample),
+                    "bot_activated": True,
+                }
+                conv_id = str(sample.get("conversation_id") or "").strip()
+                sender_key = str(sample.get("sender_key") or sample.get("sender_phone") or "").strip()
+                if conv_id:
+                    patch["external_thread_id"] = conv_id
+                if sender_key:
+                    patch["contact_phone"] = sender_key
+                self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
         except Exception as exc:
             logger.warning("Falha ao sincronizar mensagens da conversa %s: %s", conversa_id, exc)
             return written

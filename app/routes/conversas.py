@@ -74,6 +74,7 @@ def get_conversa_agente(
 def send_mensagem(
     conversation_id: str,
     body: SendMessageRequest,
+    payload: dict = Depends(obter_token_payload),
     context: dict = Depends(obter_company_context),
 ):
     return conversas_service.enviar_mensagem(
@@ -81,6 +82,7 @@ def send_mensagem(
         body.content,
         body.sender,
         workspace_id=workspace_id_from_context(context),
+        actor_user_id=payload.get("sub"),
     )
 
 

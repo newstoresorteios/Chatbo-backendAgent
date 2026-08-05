@@ -112,6 +112,14 @@ META_API_VERSION = os.getenv("META_API_VERSION", "v21.0")
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:8000")
 NITRUS_INTERNAL_API_TOKEN = os.getenv("NITRUS_INTERNAL_API_TOKEN")
 
+# Brevo — mesmo canal do NSAgentForSorteios (Central de Conversão → cliente)
+BREVO_API_KEY = _clean_env(os.getenv("BREVO_API_KEY")) or ""
+BREVO_AGENT_ID = _clean_env(os.getenv("BREVO_AGENT_ID")) or ""
+BREVO_AGENT_EMAIL = _clean_env(os.getenv("BREVO_AGENT_EMAIL")) or ""
+BREVO_AGENT_NAME = _clean_env(os.getenv("BREVO_AGENT_NAME")) or "ChatBô"
+BREVO_RECEIVED_FROM = _clean_env(os.getenv("BREVO_RECEIVED_FROM")) or BREVO_AGENT_NAME
+BREVO_SENDER_NUMBER = _clean_env(os.getenv("BREVO_SENDER_NUMBER")) or ""
+
 # ETL agendado (Render Cron) — sync Mercos → Supabase sem sobrecarregar a API
 ETL_CRON_SECRET = os.getenv("ETL_CRON_SECRET", "")
 
