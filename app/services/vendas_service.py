@@ -200,7 +200,28 @@ class VendasService:
 
     def metricas(self, workspace_id: str | None = None) -> dict:
         try:
-            return self._calcular_metricas(workspace_id=workspace_id)
+            result = self._calcular_metricas(workspace_id=workspace_id)
+            if workspace_id:
+                try:
+                    from app.services.commercial_bi_service import commercial_bi_service
+
+                    bi = commercial_bi_service.latest_public(workspace_id)
+                except Exception:
+                    bi = None
+                if bi and isinstance(bi.get("kpis"), dict):
+                    kpis = bi["kpis"]
+                    # Prefer BI when local pedidos are empty.
+                    if not result.get("quantidadeVendas"):
+                        result["quantidadeVendas"] = int(kpis.get("pedidosConfirmados") or 0)
+                        result["volumeBruto"] = float(kpis.get("receitaVendida") or 0)
+                        result["valorTotalVendido"] = float(kpis.get("receitaVendida") or 0)
+                        result["valorRetido"] = float(kpis.get("receitaRetida") or 0)
+                        result["ticketMedio"] = float(kpis.get("ticketMedio") or 0)
+                        result["valorPipeline"] = float(kpis.get("pipelineEmAberto") or 0)
+                        result["pipelineValor"] = float(kpis.get("pipelineEmAberto") or 0)
+                    result["commercialBi"] = bi
+                    result["bySource"] = kpis.get("bySource") or {}
+            return result
         except Exception as exc:
             logger.exception("Erro ao calcular métricas de venda: %s", exc)
             return self._metricas_vazias()

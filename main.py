@@ -27,6 +27,7 @@ from app.routes.internal import router as internal_router
 from app.routes.agents import router as agents_router
 from app.routes.ai import router as ai_router
 from app.routes.ai.crm_gaps import router as crm_gaps_router
+from app.routes.commercial_bi import router as commercial_bi_router
 
 validar_jwt_secret()
 
@@ -57,6 +58,7 @@ api.include_router(settings_router, tags=["Settings"])
 api.include_router(system_router, tags=["System"])
 api.include_router(workspace_router, tags=["Workspace"])
 api.include_router(personas_router, tags=["Personas"])
+api.include_router(commercial_bi_router, tags=["CommercialBI"])
 api.include_router(billing_router, tags=["Billing"])
 api.include_router(internal_router, tags=["Internal"])
 api.include_router(agents_router, tags=["Agents"])

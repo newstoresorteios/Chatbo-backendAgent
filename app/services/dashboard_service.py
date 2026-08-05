@@ -267,7 +267,30 @@ class DashboardService:
         total_produtos = self.repository.contar_produtos(workspace_id) or 0
         total_pedidos = self.repository.contar_pedidos(workspace_id) or 0
 
-        return {
+        bi = None
+        if workspace_id:
+            try:
+                from app.services.commercial_bi_service import commercial_bi_service
+
+                bi = commercial_bi_service.latest_public(workspace_id)
+            except Exception:
+                bi = None
+
+        if bi and isinstance(bi.get("kpis"), dict):
+            kpis = bi["kpis"]
+            # Prefer BI snapshot when Mercos tables are empty or BI is fresher.
+            if total_clientes == 0:
+                total_clientes = int(kpis.get("totalCustomers") or 0)
+            if total_produtos == 0:
+                total_produtos = int(kpis.get("totalProducts") or 0)
+            if total_pedidos == 0:
+                total_pedidos = int(kpis.get("pedidosConfirmados") or 0)
+            if status["active"] == 0:
+                status["active"] = int(kpis.get("conversasAtivas") or 0)
+            if status["waiting"] == 0:
+                status["waiting"] = int(kpis.get("waitingQueue") or 0)
+
+        payload = {
             "stats": {
                 "activeConversations": status["active"],
                 "closedConversations": status["closed"],
@@ -285,3 +308,6 @@ class DashboardService:
             "ordersChart": _chart_pedidos_mensal(pedidos_rows),
             "responseTimeChart": _chart_tempo_resposta_horario(msg_stats.get("rows") or []),
         }
+        if bi:
+            payload["commercialBi"] = bi
+        return payload
