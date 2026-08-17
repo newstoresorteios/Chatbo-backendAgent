@@ -7,17 +7,27 @@ from app.services.supabase_service import supabase
 
 class ConversaRepository:
 
-    def listar(self, workspace_id: str | None = None) -> list[dict]:
-        query = (
-            supabase
-            .table("conversas")
-            .select("*")
-            .order("last_message_at", desc=True)
-        )
-        if workspace_id:
-            query = apply_workspace_filter(query, workspace_id)
-        resposta = query.execute()
-        return resposta.data or []
+    def listar(self, workspace_id: str | None = None, *, max_rows: int = 2000) -> list[dict]:
+        rows: list[dict] = []
+        page_size = 500
+        offset = 0
+        while offset < max_rows:
+            query = (
+                supabase
+                .table("conversas")
+                .select("*")
+                .order("last_message_at", desc=True)
+                .range(offset, offset + page_size - 1)
+            )
+            if workspace_id:
+                query = apply_workspace_filter(query, workspace_id)
+            resposta = query.execute()
+            batch = resposta.data or []
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return rows
 
     def obter(self, conversa_id: str, workspace_id: str | None = None) -> dict | None:
         query = (
@@ -70,17 +80,27 @@ class ConversaRepository:
                 return rows[0]
         return None
 
-    def listar_legado_sem_workspace(self) -> list[dict]:
+    def listar_legado_sem_workspace(self, *, max_rows: int = 2000) -> list[dict]:
         """Conversas antigas sem workspace_id (fallback do inbox)."""
-        resposta = (
-            supabase
-            .table("conversas")
-            .select("*")
-            .is_("workspace_id", "null")
-            .order("last_message_at", desc=True)
-            .execute()
-        )
-        return resposta.data or []
+        rows: list[dict] = []
+        page_size = 500
+        offset = 0
+        while offset < max_rows:
+            resposta = (
+                supabase
+                .table("conversas")
+                .select("*")
+                .is_("workspace_id", "null")
+                .order("last_message_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = resposta.data or []
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return rows
 
     def criar(self, dados: dict, workspace_id: str | None = None) -> dict:
         payload = enriquecer_dados_conversa_com_cliente_id(dados)

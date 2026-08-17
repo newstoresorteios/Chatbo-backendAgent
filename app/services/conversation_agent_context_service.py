@@ -1,4 +1,8 @@
-"""Agrega dados das tabelas ai_* para o painel de atendimento."""
+"""Agrega dados das tabelas ai_* para o painel de atendimento.
+
+As tabelas do NSAgentForSorteios não têm workspace_id — consultas vão direto
+ao Postgres compartilhado, sem filtro multi-tenant do ChatBô.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +13,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.repositories.conversa_repository import ConversaRepository
-from app.services.ai.resources import (
-    agent_responses_service,
-    contact_memories_service,
-    conversation_statuses_service,
-    pix_payments_service,
-    remarketing_contacts_service,
-)
+from app.services.supabase_service import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +47,27 @@ def _sender_key_candidates(conversa: dict) -> list[str]:
     return keys
 
 
-def _first_item(result: dict | None) -> dict | None:
-    items = (result or {}).get("items") or []
-    return items[0] if items else None
-
-
-def _safe_listar(service, usuario: dict, **kwargs) -> dict:
+def _query_ai(table: str, filters: dict[str, Any], *, limit: int = 5, order: str = "created_at") -> list[dict]:
     try:
-        return service.listar(usuario, **kwargs)
+        query = supabase.table(table).select("*")
+        for key, value in filters.items():
+            if value is None or value == "":
+                continue
+            query = query.eq(key, value)
+        query = query.order(order, desc=True).limit(limit)
+        return query.execute().data or []
     except Exception as exc:
-        logger.warning("Falha ao listar %s: %s", getattr(service.repo, "table", "?"), exc)
-        return {"items": [], "page": 1, "pageSize": kwargs.get("page_size", 50), "total": 0}
+        logger.warning("Falha ao ler %s %s: %s", table, filters, exc)
+        return []
+
+
+def _first_match(table: str, columns: list[str], keys: list[str]) -> dict | None:
+    for key in keys:
+        for column in columns:
+            rows = _query_ai(table, {column: key}, limit=1)
+            if rows:
+                return rows[0]
+    return None
 
 
 def _map_contact(row: dict | None) -> dict | None:
@@ -142,43 +150,29 @@ class ConversationAgentContextService:
     def __init__(self):
         self.conversas = ConversaRepository()
 
-    def _find_contact(self, usuario: dict, sender_keys: list[str]) -> dict | None:
-        for key in sender_keys:
-            for column in ("sender_key", "sender_phone", "identity_key"):
-                row = _first_item(
-                    _safe_listar(
-                        remarketing_contacts_service,
-                        usuario,
-                        page=1,
-                        page_size=1,
-                        filters={column: key},
-                    )
-                )
-                if row:
-                    return row
-        return None
-
-    def _find_status(self, usuario: dict, contact_id: Any) -> dict | None:
-        if contact_id is None:
-            return None
-        return _first_item(
-            _safe_listar(
-                conversation_statuses_service,
-                usuario,
-                page=1,
-                page_size=1,
-                filters={"contact_id": contact_id},
-            )
-        )
-
     def obter(self, conversation_id: str, usuario: dict, workspace_id: str | None) -> dict:
+        _ = usuario
         conversa = self.conversas.obter(conversation_id, workspace_id=workspace_id)
+        if not conversa and workspace_id:
+            conversa = self.conversas.obter(conversation_id, workspace_id=None)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
         sender_keys = _sender_key_candidates(conversa)
-        contact_row = self._find_contact(usuario, sender_keys)
-        status_row = self._find_status(usuario, contact_row.get("id") if contact_row else None)
+        contact_row = _first_match(
+            "ai_remarketing_contacts",
+            ["sender_key", "sender_phone", "identity_key"],
+            sender_keys,
+        )
+        status_row = None
+        if contact_row and contact_row.get("id") is not None:
+            status_rows = _query_ai(
+                "ai_conversation_statuses",
+                {"contact_id": contact_row.get("id")},
+                limit=1,
+                order="updated_at",
+            )
+            status_row = status_rows[0] if status_rows else None
 
         memories_items: list[dict] = []
         responses_items: list[dict] = []
@@ -186,50 +180,39 @@ class ConversationAgentContextService:
 
         for key in sender_keys:
             if not memories_items:
-                memories_items = (
-                    _safe_listar(
-                        contact_memories_service,
-                        usuario,
-                        page=1,
-                        page_size=5,
-                        filters={"sender_key": key, "status": "active"},
-                    ).get("items")
-                    or []
+                memories_items = _query_ai(
+                    "ai_contact_memories",
+                    {"sender_key": key, "status": "active"},
+                    limit=5,
+                    order="updated_at",
                 )
             if not responses_items:
-                responses_items = (
-                    _safe_listar(
-                        agent_responses_service,
-                        usuario,
-                        page=1,
-                        page_size=3,
-                        filters={"sender_key": key},
-                    ).get("items")
-                    or []
+                responses_items = _query_ai(
+                    "ai_agent_responses",
+                    {"sender_key": key},
+                    limit=3,
                 )
             if not pix_items:
-                pix_items = (
-                    _safe_listar(
-                        pix_payments_service,
-                        usuario,
-                        page=1,
-                        page_size=5,
-                        filters={"sender_key": key},
-                    ).get("items")
-                    or []
+                pix_items = _query_ai(
+                    "ai_pix_payments",
+                    {"sender_key": key},
+                    limit=5,
+                    order="updated_at",
                 )
 
         if not pix_items:
-            pix_items = (
-                _safe_listar(
-                    pix_payments_service,
-                    usuario,
-                    page=1,
-                    page_size=5,
-                    filters={"conversation_id": conversation_id},
-                ).get("items")
-                or []
-            )
+            thread_id = str(conversa.get("external_thread_id") or "").strip()
+            for conv_key in (thread_id, conversation_id):
+                if not conv_key:
+                    continue
+                pix_items = _query_ai(
+                    "ai_pix_payments",
+                    {"conversation_id": conv_key},
+                    limit=5,
+                    order="updated_at",
+                )
+                if pix_items:
+                    break
 
         return {
             "conversationId": conversation_id,

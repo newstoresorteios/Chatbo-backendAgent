@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import logging
+import threading
 
 from fastapi import HTTPException
 
@@ -116,6 +117,46 @@ def _format_atendente_outbound(actor_name: str | None, content: str) -> str:
     return f"{prefix}\n{body}"
 
 
+_SYNC_LOCK = threading.Lock()
+_SYNC_RUNNING: set[str] = set()
+
+
+def _kick_workspace_sync(workspace_id: str) -> None:
+    """Sync NSAgent em background para o GET /conversas não estourar timeout."""
+    if not workspace_id:
+        return
+    with _SYNC_LOCK:
+        if workspace_id in _SYNC_RUNNING:
+            return
+        _SYNC_RUNNING.add(workspace_id)
+
+    def _run() -> None:
+        try:
+            from app.services.ai_conversas_bridge import ai_conversas_bridge
+            from app.services.inbox_cache import conversas_cache
+
+            synced = ai_conversas_bridge.sync_workspace(workspace_id)
+            if synced:
+                logger.info(
+                    "Inbox sync AI (bg): %s thread(s) para workspace %s",
+                    synced,
+                    workspace_id,
+                )
+                conversas_cache.delete(f"conversas:{workspace_id}")
+                conversas_cache.delete("conversas:all")
+        except Exception as exc:
+            logger.warning("Sync AI background falhou: %s", exc)
+        finally:
+            with _SYNC_LOCK:
+                _SYNC_RUNNING.discard(workspace_id)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"ai-inbox-sync-{workspace_id[:8]}",
+    ).start()
+
+
 class ConversasService:
 
     def __init__(self):
@@ -124,6 +165,15 @@ class ConversasService:
         self.usuarios = UsuarioRepository()
 
     def _users_index(self) -> dict[str, dict]:
+        try:
+            from app.services.inbox_cache import conversas_cache
+
+            cached = conversas_cache.get("users-index")
+            if cached is not None:
+                return cached
+        except Exception:
+            cached = None
+
         index: dict[str, dict] = {}
         for row in self.usuarios.listar():
             uid = str(row.get("id"))
@@ -133,6 +183,12 @@ class ConversasService:
                 "role": row.get("perfil") or "user",
                 "active": row.get("ativo") is not False,
             }
+        try:
+            from app.services.inbox_cache import conversas_cache
+
+            conversas_cache.set("users-index", index, 30.0)
+        except Exception:
+            pass
         return index
 
     def _usuario_ativo(self, usuario_id: str) -> dict:
@@ -172,6 +228,26 @@ class ConversasService:
             workspace_id=workspace_id,
         )
 
+    def _listar_rows_inbox(self, workspace_id: str | None) -> list[dict]:
+        rows = self.conversas.listar(workspace_id=workspace_id)
+        if not workspace_id:
+            return rows
+        # Une legado (sem workspace_id) para não esconder threads WhatsApp/NSAgent antigas.
+        try:
+            legado = self.conversas.listar_legado_sem_workspace()
+        except Exception as exc:
+            logger.warning("Falha ao listar conversas legadas: %s", exc)
+            return rows
+        seen = {str(row.get("id")) for row in rows}
+        merged = list(rows)
+        for row in legado:
+            row_id = str(row.get("id") or "")
+            if row_id and row_id not in seen:
+                merged.append(row)
+                seen.add(row_id)
+        merged.sort(key=lambda r: r.get("last_message_at") or r.get("created_at") or "", reverse=True)
+        return merged
+
     def listar_conversas(self, workspace_id: str | None = None) -> list[dict]:
         cache_key = f"conversas:{workspace_id or 'all'}"
         cached = None
@@ -184,18 +260,10 @@ class ConversasService:
 
         if workspace_id:
             try:
-                from app.services.ai_conversas_bridge import ai_conversas_bridge
                 from app.services.inbox_cache import SYNC_WORKSPACE_INTERVAL, sync_throttle
 
                 if sync_throttle.should_run(f"ws-sync:{workspace_id}", SYNC_WORKSPACE_INTERVAL):
-                    synced = ai_conversas_bridge.sync_workspace(workspace_id)
-                    if synced:
-                        logger.info(
-                            "Inbox sync AI: %s thread(s) para workspace %s",
-                            synced,
-                            workspace_id,
-                        )
-                        cached = None  # força refresh após sync com novidades
+                    _kick_workspace_sync(workspace_id)
             except Exception as exc:
                 logger.warning("Sync AI → conversas falhou: %s", exc)
 
@@ -203,10 +271,7 @@ class ConversasService:
             return cached
 
         try:
-            rows = self.conversas.listar(workspace_id=workspace_id)
-            # Fallback: conversas legadas sem workspace_id (antes do multi-tenant).
-            if workspace_id and not rows:
-                rows = self.conversas.listar_legado_sem_workspace()
+            rows = self._listar_rows_inbox(workspace_id)
         except Exception as exc:
             if "conversas" in str(exc).lower():
                 raise HTTPException(
@@ -264,7 +329,6 @@ class ConversasService:
         mapped = [_map_mensagem(row) for row in rows]
 
         # Transcript só como fallback se a tabela mensagens ainda estiver vazia.
-        # (Antes rodava em TODO poll e duplicava o custo do sync.)
         if not mapped:
             try:
                 from app.services.ai_conversas_bridge import ai_conversas_bridge
@@ -274,6 +338,14 @@ class ConversasService:
                     mapped = _merge_mensagens([], transcript)
             except Exception as exc:
                 logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
+
+        if written:
+            try:
+                from app.services.inbox_cache import invalidate_conversa
+
+                invalidate_conversa(conversa_id, workspace_id or conversa.get("workspace_id"))
+            except Exception:
+                pass
 
         try:
             from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache

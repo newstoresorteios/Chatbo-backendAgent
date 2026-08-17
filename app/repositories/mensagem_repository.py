@@ -14,6 +14,20 @@ class MensagemRepository:
         )
         return resposta.data or []
 
+    def listar_external_ids(self, conversa_id: str) -> set[str]:
+        resposta = (
+            supabase
+            .table("mensagens")
+            .select("external_id")
+            .eq("conversa_id", conversa_id)
+            .execute()
+        )
+        return {
+            str(row["external_id"])
+            for row in (resposta.data or [])
+            if row.get("external_id")
+        }
+
     def criar(self, dados: dict) -> dict:
         resposta = supabase.table("mensagens").insert(dados).execute()
         rows = resposta.data or []
