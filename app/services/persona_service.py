@@ -10,30 +10,6 @@ from app.services.workspace_service import WORKSPACE_ADMIN_ROLES, workspace_serv
 
 logger = logging.getLogger(__name__)
 PERSONA_VIEW_ROLES = {"owner", "admin", "supervisor"}
-REQUIRED_ACTIVATION_FIELDS = {
-    "name": "name",
-    "role": "role",
-    "segment": "segment",
-    "language": "language",
-    "tone": "tone",
-    "greeting": "greeting",
-    "targetAudience": "target_audience",
-    "salesGoals": "sales_goals",
-    "qualificationRules": "qualification_rules",
-    "restrictions": "restrictions",
-}
-ACTIVATION_FIELD_LABELS = {
-    "name": "Nome da persona",
-    "role": "Função",
-    "segment": "Segmento",
-    "language": "Idioma",
-    "tone": "Tom de voz",
-    "greeting": "Saudação inicial",
-    "targetAudience": "Público-alvo",
-    "salesGoals": "Objetivos de venda",
-    "qualificationRules": "Qualificação (perguntas, descoberta ou critérios de oportunidade)",
-    "restrictions": "Informações que não pode inventar",
-}
 LIST_LIMIT = 80
 
 
@@ -279,52 +255,12 @@ class PersonaService:
             response["nsAgentPublish"] = publish
         return response
 
-    def _has_list_items(self, *values: Any) -> bool:
-        for value in values:
-            if isinstance(value, str) and value.strip():
-                return True
-            if not isinstance(value, list):
-                continue
-            for item in value:
-                if isinstance(item, dict):
-                    continue
-                if self._clean_text(item):
-                    return True
-        return False
-
-    def _missing_activation_fields(self, persona: dict) -> list[str]:
-        missing = []
-        for public_name, db_name in REQUIRED_ACTIVATION_FIELDS.items():
-            if public_name == "qualificationRules":
-                if not self._has_list_items(
-                    persona.get("qualification_rules"),
-                    persona.get("opportunity_criteria"),
-                ):
-                    missing.append(public_name)
-                continue
-            value = persona.get(db_name)
-            if isinstance(value, list):
-                if not self._has_list_items(value):
-                    missing.append(public_name)
-            elif not self._clean_text(value):
-                missing.append(public_name)
-        return missing
-
     def ativar(self, usuario: dict, persona_id: str) -> dict:
         context = self._context(usuario)
         self._require_admin(context, "Você não possui permissão para alterar esta persona.")
         persona = self.repo.buscar_por_id_workspace(persona_id, context["workspaceId"])
         if not persona:
             raise HTTPException(status_code=404, detail="Persona não encontrada.")
-
-        missing = self._missing_activation_fields(persona)
-        if missing:
-            labels = ", ".join(ACTIVATION_FIELD_LABELS.get(field, field) for field in missing)
-            logger.warning("activate persona %s blocked missing=%s", persona_id, missing)
-            raise HTTPException(
-                status_code=400,
-                detail=f"A persona ainda não pode ser ativada. Preencha: {labels}.",
-            )
 
         user_id = str(usuario.get("id"))
 

@@ -254,25 +254,14 @@ class PersonaServiceTest(unittest.TestCase):
         self.assertEqual([item["version"] for item in versions], [2, 1])
         self.assertEqual(version["version"], 1)
 
-    def test_activation_validates_required_fields(self):
+    def test_activation_allows_partial_persona(self):
         created = self.service.criar(self.user, {"name": "Incompleta"})
+        self.service._publish_to_nsagent = Mock(return_value={"published": True, "version": 1})
 
-        with self.assertRaises(HTTPException) as err:
-            self.service.ativar(self.user, created["id"])
+        activated = self.service.ativar(self.user, created["id"])
 
-        self.assertEqual(err.exception.status_code, 400)
-        self.assertIn("não pode ser ativada", err.exception.detail)
-        self.assertIn("Função", err.exception.detail)
-
-    def test_activation_accepts_opportunity_criteria_as_qualification(self):
-        created = self.service.criar(self.user, {
-            **persona_payload(),
-            "qualificationRules": [],
-            "opportunityCriteria": ["Cliente pediu proposta"],
-        })
-        row = self.repo.personas[created["id"]]
-        self.assertEqual(row["qualification_rules"], [])
-        self.assertEqual(self.service._missing_activation_fields(row), [])
+        self.assertEqual(activated["status"], "active")
+        self.assertEqual(activated["name"], "Incompleta")
 
     def test_temporary_test_does_not_persist_or_change_active(self):
         created = self.create_complete_persona()
