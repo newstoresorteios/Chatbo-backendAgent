@@ -22,7 +22,7 @@ REQUIRED_ACTIVATION_FIELDS = {
     "qualificationRules": "qualification_rules",
     "restrictions": "restrictions",
 }
-LIST_LIMIT = 30
+LIST_LIMIT = 80
 
 
 class PersonaService:
