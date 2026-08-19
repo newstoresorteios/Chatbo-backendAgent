@@ -261,7 +261,18 @@ class PersonaServiceTest(unittest.TestCase):
             self.service.ativar(self.user, created["id"])
 
         self.assertEqual(err.exception.status_code, 400)
-        self.assertIn("missingFields", err.exception.detail)
+        self.assertIn("não pode ser ativada", err.exception.detail)
+        self.assertIn("Função", err.exception.detail)
+
+    def test_activation_accepts_opportunity_criteria_as_qualification(self):
+        created = self.service.criar(self.user, {
+            **persona_payload(),
+            "qualificationRules": [],
+            "opportunityCriteria": ["Cliente pediu proposta"],
+        })
+        row = self.repo.personas[created["id"]]
+        self.assertEqual(row["qualification_rules"], [])
+        self.assertEqual(self.service._missing_activation_fields(row), [])
 
     def test_temporary_test_does_not_persist_or_change_active(self):
         created = self.create_complete_persona()
