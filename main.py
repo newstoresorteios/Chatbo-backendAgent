@@ -1,8 +1,11 @@
 import os
 import sys
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config.settings import SUPABASE_KEY, SUPABASE_URL, cors_origins, validar_jwt_secret
 from app.routes.login import router as login_router
@@ -74,6 +77,19 @@ api.include_router(etl_router, tags=["ETL"])
 
 app.include_router(api)
 app.include_router(webhooks_router, tags=["Webhooks"])
+
+
+@app.exception_handler(RequestValidationError)
+async def log_validation_error(request: Request, exc: RequestValidationError):
+    import logging
+
+    logging.getLogger("uvicorn.error").warning(
+        "422 %s %s errors=%s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+    )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
 
 @app.get("/")

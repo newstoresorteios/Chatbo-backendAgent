@@ -24,6 +24,7 @@ sys.modules.setdefault("httpx", httpx_stub)
 
 supabase_stub = types.ModuleType("supabase")
 supabase_stub.Client = object
+supabase_stub.ClientOptions = object
 supabase_stub.create_client = lambda *_args, **_kwargs: object()
 sys.modules.setdefault("supabase", supabase_stub)
 
@@ -161,6 +162,22 @@ class PersonaServiceTest(unittest.TestCase):
         self.assertEqual(updated["version"], 2)
         self.assertEqual(self.repo.versions[-1]["change_type"], "updated")
         self.assertEqual(self.repo.versions[-1]["version"], 2)
+
+    def test_update_accepts_oversized_and_duplicate_lists(self):
+        created = self.create_complete_persona()
+        items = [f"Não inventar preço {i}" for i in range(60)]
+        updated = self.service.atualizar(self.user, created["id"], {
+            "customerAddressStyle": "Olá, {nome}! " * 80,
+            "restrictions": [*items, *items, {"ignored": True}, None],
+            "examples": [
+                {"id": "ex-1", "customer_message": "Tem estoque?", "expected_response": "Confirmo agora."},
+                {"customerMessage": "", "expectedResponse": ""},
+            ],
+        })
+
+        self.assertGreater(len(updated["customerAddressStyle"]), 120)
+        self.assertEqual(len(updated["restrictions"]), 60)
+        self.assertEqual(updated["examples"][0]["customerMessage"], "Tem estoque?")
 
     def test_activate_persona_and_list_active(self):
         created = self.create_complete_persona()

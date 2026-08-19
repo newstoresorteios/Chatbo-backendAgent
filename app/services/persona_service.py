@@ -47,22 +47,34 @@ class PersonaService:
         text = str(value).strip()
         return text or None
 
-    def _clean_list(self, value: Any) -> list:
+    def _clean_list(self, value: Any, *, keep_dicts: bool = False) -> list:
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
         if not isinstance(value, list):
             return []
-        cleaned = []
-        for item in value[:LIST_LIMIT]:
-            if isinstance(item, str):
-                text = item.strip()
-                if text:
-                    cleaned.append(text)
-            elif isinstance(item, dict):
-                cleaned.append(item)
+        cleaned: list = []
+        seen: set[str] = set()
+        for item in value:
+            if isinstance(item, dict):
+                if keep_dicts:
+                    cleaned.append(item)
+                continue
+            text = self._clean_text(item)
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(text)
+            if len(cleaned) >= LIST_LIMIT:
+                break
         return cleaned
 
     def _examples_payload(self, examples: Any) -> list[dict]:
         result = []
-        for item in self._clean_list(examples):
+        for item in self._clean_list(examples, keep_dicts=True):
             if not isinstance(item, dict):
                 continue
             customer_message = self._clean_text(item.get("customerMessage") or item.get("customer_message"))
