@@ -25,6 +25,25 @@ def test_compile_instructions_includes_core_fields():
     assert "Tem relógio?" in text
 
 
+def test_compile_instructions_groups_prefixed_restrictions():
+    text = compile_instructions(
+        {
+            "name": "Felipe Bot",
+            "role": "consultor",
+            "restrictions": [
+                "ASSUNTO PROIBIDO — política",
+                "NÃO PROMETER — garantia de lucro",
+                "NÃO INVENTAR — preço",
+                "SÓ COM HUMANO — desconto especial",
+            ],
+        }
+    )
+    assert "Assuntos proibidos:" in text
+    assert "política" in text
+    assert "Promessas que não pode fazer:" in text
+    assert "Condições comerciais que exigem humano:" in text
+
+
 def test_compile_instructions_includes_knowledge_docs():
     text = compile_instructions(
         {

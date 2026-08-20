@@ -12,6 +12,7 @@ from app.config.settings import (
     NSAGENT_PERSONA_KEY,
     NSAGENT_PERSONA_TENANT_ID,
 )
+from app.services.persona_restrictions import GROUP_LABELS, GROUP_ORDER, decode_restrictions
 from app.services.supabase_service import supabase
 
 logger = logging.getLogger(__name__)
@@ -193,9 +194,18 @@ def compile_instructions(persona: dict, knowledge_docs: list[dict] | None = None
     if escalation:
         parts.append("Regras de escalonamento:\n" + escalation)
 
-    restrictions = _list_lines(persona.get("restrictions"))
-    if restrictions:
-        parts.append("Restrições obrigatórias:\n" + restrictions)
+    restriction_groups = decode_restrictions(persona.get("restrictions"))
+    grouped_restrictions = [
+        f"{GROUP_LABELS[group]}:\n{_list_lines(restriction_groups[group])}"
+        for group in GROUP_ORDER
+        if restriction_groups[group]
+    ]
+    if grouped_restrictions:
+        parts.extend(grouped_restrictions)
+    else:
+        restrictions = _list_lines(persona.get("restrictions"))
+        if restrictions:
+            parts.append("Restrições obrigatórias:\n" + restrictions)
 
     examples = _examples_block(persona.get("examples"))
     if examples:

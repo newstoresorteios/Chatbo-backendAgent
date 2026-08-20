@@ -6,6 +6,13 @@ from fastapi import HTTPException
 
 from app.repositories.persona_repository import PersonaRepository
 from app.services.openai_provider import call_openai_resilient
+from app.services.persona_restrictions import (
+    CAMEL_TO_GROUP,
+    decode_restrictions,
+    encode_restriction_groups,
+    groups_from_payload,
+    has_restriction_groups,
+)
 from app.services.workspace_service import WORKSPACE_ADMIN_ROLES, workspace_service
 
 logger = logging.getLogger(__name__)
@@ -74,7 +81,7 @@ class PersonaService:
                 })
         return result
 
-    def _editable_to_db(self, payload: dict, *, partial: bool = False) -> dict:
+    def _editable_to_db(self, payload: dict, *, partial: bool = False, current: dict | None = None) -> dict:
         mapping = {
             "name": "name",
             "role": "role",
@@ -106,7 +113,16 @@ class PersonaService:
             elif not partial and src == "language":
                 db[dest] = "pt-BR"
         for src, dest in list_mapping.items():
-            if src in payload:
+            if src == "restrictions" and has_restriction_groups(payload):
+                groups = decode_restrictions((current or {}).get("restrictions") or []) if partial else {
+                    key: [] for key in CAMEL_TO_GROUP.values()
+                }
+                incoming = groups_from_payload(payload, clean_list=self._clean_list)
+                for camel, group in CAMEL_TO_GROUP.items():
+                    if camel in payload:
+                        groups[group] = incoming[group]
+                db[dest] = encode_restriction_groups(groups)
+            elif src in payload:
                 db[dest] = self._clean_list(payload.get(src))
             elif not partial:
                 db[dest] = []
@@ -145,6 +161,7 @@ class PersonaService:
             "recommendationRules": row.get("recommendation_rules") or [],
             "escalationRules": row.get("escalation_rules") or [],
             "restrictions": row.get("restrictions") or [],
+            **decode_restrictions(row.get("restrictions") or []),
             "examples": row.get("examples") or [],
             "status": row.get("status") or "draft",
             "version": int(row.get("version") or 1),
@@ -239,7 +256,7 @@ class PersonaService:
         persona = self.repo.buscar_por_id_workspace(persona_id, context["workspaceId"])
         if not persona:
             raise HTTPException(status_code=404, detail="Persona não encontrada.")
-        db_payload = self._editable_to_db(payload, partial=True)
+        db_payload = self._editable_to_db(payload, partial=True, current=persona)
         if not db_payload:
             return self._response(persona)
         updated = self.repo.atualizar(persona_id, context["workspaceId"], {

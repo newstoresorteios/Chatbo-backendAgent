@@ -34,6 +34,10 @@ class AgentPersonaEditable(BaseModel):
     recommendationRules: list[str] = Field(default_factory=list, max_length=100)
     escalationRules: list[str] = Field(default_factory=list, max_length=100)
     restrictions: list[str] = Field(default_factory=list, max_length=100)
+    forbiddenSubjects: list[str] = Field(default_factory=list, max_length=100)
+    forbiddenPromises: list[str] = Field(default_factory=list, max_length=100)
+    nonInventableInformation: list[str] = Field(default_factory=list, max_length=100)
+    humanOnlyCommercialTerms: list[str] = Field(default_factory=list, max_length=100)
     examples: list[PersonaExample] = Field(default_factory=list, max_length=40)
 
 
@@ -65,6 +69,10 @@ class AgentPersonaUpdate(BaseModel):
     recommendationRules: list[str] | None = Field(default=None, max_length=100)
     escalationRules: list[str] | None = Field(default=None, max_length=100)
     restrictions: list[str] | None = Field(default=None, max_length=100)
+    forbiddenSubjects: list[str] | None = Field(default=None, max_length=100)
+    forbiddenPromises: list[str] | None = Field(default=None, max_length=100)
+    nonInventableInformation: list[str] | None = Field(default=None, max_length=100)
+    humanOnlyCommercialTerms: list[str] | None = Field(default=None, max_length=100)
     examples: list[PersonaExample] | None = Field(default=None, max_length=40)
 
 

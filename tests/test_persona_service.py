@@ -179,6 +179,22 @@ class PersonaServiceTest(unittest.TestCase):
         self.assertEqual(len(updated["restrictions"]), 60)
         self.assertEqual(updated["examples"][0]["customerMessage"], "Tem estoque?")
 
+    def test_update_keeps_section_9_lists_in_separate_fields(self):
+        created = self.create_complete_persona()
+        updated = self.service.atualizar(self.user, created["id"], {
+            "forbiddenSubjects": ["política"],
+            "forbiddenPromises": ["garantir lucro"],
+            "nonInventableInformation": ["preço de tabela"],
+            "humanOnlyCommercialTerms": ["desconto especial"],
+        })
+
+        self.assertEqual(updated["forbiddenSubjects"], ["política"])
+        self.assertEqual(updated["forbiddenPromises"], ["garantir lucro"])
+        self.assertEqual(updated["nonInventableInformation"], ["preço de tabela"])
+        self.assertEqual(updated["humanOnlyCommercialTerms"], ["desconto especial"])
+        self.assertTrue(any(item.startswith("ASSUNTO PROIBIDO — ") for item in updated["restrictions"]))
+        self.assertEqual(len(updated["restrictions"]), 4)
+
     def test_activate_persona_and_list_active(self):
         created = self.create_complete_persona()
 
