@@ -10,6 +10,7 @@ A lista da Central só materializa conversas (metadados). O histórico completo
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -39,6 +40,34 @@ def _thread_key(row: dict) -> str | None:
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
+
+
+def _is_placeholder_name(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return bool(re.match(r"^(contato|cliente)\s+\S+$", text, re.I))
+
+
+def _customer_display_name(sample: dict, *, key: str = "", existing: str | None = None) -> str:
+    """Prefer Instagram/WhatsApp handle over the Contato 6664 fallback."""
+    username = str(sample.get("sender_username") or "").strip().lstrip("@")
+    person = str(sample.get("sender_name") or "").strip()
+    phone = str(sample.get("sender_phone") or "").strip()
+    channel = _channel(sample)
+
+    if username:
+        if channel == "instagram" or _is_placeholder_name(person):
+            return username
+        return person or username
+    if person and not _is_placeholder_name(person):
+        return person
+    if existing and not _is_placeholder_name(existing):
+        return str(existing).strip()
+    if phone and channel == "whatsapp":
+        return phone
+    suffix = key[-4:] if len(str(key)) >= 4 else (key or "0000")
+    return f"Contato {suffix}"
 
 
 def _channel(row: dict) -> str:
@@ -239,10 +268,10 @@ class AiConversasBridge:
             if index:
                 index.add(existing)
 
-        name = (
-            sample.get("sender_name")
-            or sample.get("sender_username")
-            or f"Contato {key[-4:] if len(key) >= 4 else key}"
+        name = _customer_display_name(
+            sample,
+            key=key,
+            existing=(existing or {}).get("customer_name") if existing else None,
         )
         channel = _channel(sample)
         last_text = sample.get("text") or sample.get("reply_text") or ""
@@ -257,6 +286,8 @@ class AiConversasBridge:
                 or existing.get("contact_phone") == existing.get("external_thread_id")
             ):
                 patch["contact_phone"] = sender_key
+            if name and name != existing.get("customer_name"):
+                patch["customer_name"] = name
             if patch:
                 updated = self.conversas.atualizar(
                     str(existing["id"]),
@@ -515,9 +546,11 @@ class AiConversasBridge:
         conversa_id = str(conversa["id"])
         last_text, last_at = self._last_preview(inbounds, responses, sample)
         patch = {
-            "customer_name": sample.get("sender_name")
-            or sample.get("sender_username")
-            or conversa.get("customer_name"),
+            "customer_name": _customer_display_name(
+                sample,
+                key=key,
+                existing=conversa.get("customer_name"),
+            ),
             "last_message": last_text,
             "last_message_at": last_at,
             "channel": _channel(sample),
@@ -571,9 +604,11 @@ class AiConversasBridge:
                 sample = inbounds[-1] if inbounds else responses[-1]
                 last_text, last_at = self._last_preview(inbounds, responses, sample)
                 patch = {
-                    "customer_name": sample.get("sender_name")
-                    or sample.get("sender_username")
-                    or conversa.get("customer_name"),
+                    "customer_name": _customer_display_name(
+                        sample,
+                        key=_thread_key(sample) or "",
+                        existing=conversa.get("customer_name"),
+                    ),
                     "last_message": last_text,
                     "last_message_at": last_at,
                     "channel": _channel(sample),

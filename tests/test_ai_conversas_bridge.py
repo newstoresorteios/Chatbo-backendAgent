@@ -1,5 +1,6 @@
 from app.services.ai_conversas_bridge import (
     _channel,
+    _customer_display_name,
     _thread_key,
     AiConversasBridge,
 )
@@ -80,3 +81,19 @@ def test_group_threads_merges_orphan_response_by_sender_key():
     threads = bridge._group_threads(inbounds, responses)
     assert list(threads.keys()) == ["cv-1"]
     assert len(threads["cv-1"]["responses"]) == 1
+
+
+def test_display_name_prefers_instagram_username_over_contato():
+    assert _customer_display_name(
+        {"channel": "instagram", "sender_username": "tironi_oficial"},
+        key="ig:12345664",
+        existing="Contato 6664",
+    ) == "tironi_oficial"
+
+
+def test_display_name_keeps_good_existing_name():
+    assert _customer_display_name(
+        {"channel": "instagram"},
+        key="ig:12345664",
+        existing="Maria Silva",
+    ) == "Maria Silva"

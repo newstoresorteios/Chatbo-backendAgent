@@ -411,12 +411,16 @@ class ConversasService:
             workspace_id=workspace_id,
         )
 
-        delivery: dict = {"sent": False, "reason": "Brevo não tentado"}
+        delivery: dict = {"sent": False, "reason": "Envio não tentado"}
         if sender in {"agent", "ai"}:
             from app.services.brevo_outbound_service import brevo_outbound_service
+            from app.services.meta_instagram_outbound import enviar_para_conversa as enviar_meta
+            from app.services.meta_instagram_outbound import is_meta_instagram
 
-            # New Store: somente Brevo (mesmo caminho do NSAgentForSorteios).
-            if not brevo_outbound_service.configurado():
+            inbound = brevo_outbound_service._lookup_inbound(conversa) or {}
+            if is_meta_instagram(conversa, inbound):
+                delivery = enviar_meta(conversa, outbound_text, inbound)
+            elif not brevo_outbound_service.configurado():
                 delivery = {
                     "sent": False,
                     "reason": (
@@ -439,16 +443,24 @@ class ConversasService:
                     },
                 )
 
+            if sender == "agent":
+                try:
+                    from app.services.human_takeover_bridge import mark_human_active
+
+                    mark_human_active(conversa, source="chatbo_mensagem")
+                except Exception:
+                    pass
+
             if not delivery.get("sent"):
                 logger.error(
-                    "Falha envio Brevo conversa=%s reason=%s",
+                    "Falha envio conversa=%s reason=%s",
                     conversa_id,
                     delivery.get("reason"),
                 )
                 raise HTTPException(
                     status_code=502,
                     detail=delivery.get("reason")
-                    or "Não foi possível entregar a mensagem ao cliente via Brevo",
+                    or "Não foi possível entregar a mensagem ao cliente",
                 )
         elif sender == "customer":
             try:
@@ -508,15 +520,18 @@ class ConversasService:
             event,
             workspace_id=workspace_id,
         )
+        mapped_row = row or self._obter_conversa(conversa_id, workspace_id=workspace_id)
         try:
+            from app.services.human_takeover_bridge import mark_human_active
             from app.services.inbox_cache import invalidate_conversa
 
             invalidate_conversa(conversa_id, workspace_id)
+            mark_human_active(mapped_row, source="chatbo_assumir" if assumindo else "chatbo_transferir")
         except Exception:
             pass
         users = self._users_index()
         return _map_conversa(
-            row or self._obter_conversa(conversa_id, workspace_id=workspace_id),
+            mapped_row,
             users,
         )
 

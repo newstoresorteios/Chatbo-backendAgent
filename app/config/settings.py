@@ -106,6 +106,12 @@ COPILOT_GPT_ONLY = os.getenv("COPILOT_GPT_ONLY", "true").lower() == "true"
 META_APP_ID = os.getenv("META_APP_ID", "")
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")
 META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+META_PAGE_ACCESS_TOKEN = (
+    _clean_env(os.getenv("META_PAGE_ACCESS_TOKEN"))
+    or _clean_env(META_ACCESS_TOKEN)
+    or ""
+)
+META_IG_BUSINESS_ACCOUNT_ID = _clean_env(os.getenv("META_IG_BUSINESS_ACCOUNT_ID")) or ""
 META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "")
 META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "pulsedesk_whatsapp_verify")
 META_API_VERSION = os.getenv("META_API_VERSION", "v21.0")
