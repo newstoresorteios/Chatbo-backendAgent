@@ -99,6 +99,11 @@ def _unique(values: Iterable[Any]) -> list[str]:
     return seen
 
 
+def _is_duplicate_external_id_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "duplicate key" in text and "external_id" in text
+
+
 class _ConversaIndex:
     """Índice em memória para não consultar conversas N vezes no sync da inbox."""
 
@@ -342,12 +347,18 @@ class AiConversasBridge:
             self.mensagens.criar(stamped)
             return True
         except Exception as exc:
+            if _is_duplicate_external_id_error(exc):
+                logger.debug("Mensagem %s já existe (external_id duplicado)", external_id)
+                return False
             if "workspace_id" in str(exc).lower():
                 stamped.pop("workspace_id", None)
                 try:
                     self.mensagens.criar(stamped)
                     return True
                 except Exception as exc2:
+                    if _is_duplicate_external_id_error(exc2):
+                        logger.debug("Mensagem %s já existe (external_id duplicado)", external_id)
+                        return False
                     logger.warning("Falha ao gravar %s: %s", external_id, exc2)
                     return False
             logger.warning("Falha ao gravar %s: %s", external_id, exc)
@@ -586,7 +597,7 @@ class AiConversasBridge:
                 external_id = f"ai-in-{inbound_id}" if inbound_id is not None else None
                 if external_id and external_id in existing_ext:
                     continue
-                if self._upsert_inbound(conversa_id, row, workspace_id, known_new=bool(external_id)):
+                if self._upsert_inbound(conversa_id, row, workspace_id):
                     written += 1
                     if external_id:
                         existing_ext.add(external_id)
@@ -595,7 +606,7 @@ class AiConversasBridge:
                 external_id = f"ai-out-{response_id}" if response_id is not None else None
                 if external_id and external_id in existing_ext:
                     continue
-                if self._upsert_response(conversa_id, row, workspace_id, known_new=bool(external_id)):
+                if self._upsert_response(conversa_id, row, workspace_id):
                     written += 1
                     if external_id:
                         existing_ext.add(external_id)
