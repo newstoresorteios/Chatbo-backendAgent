@@ -173,3 +173,42 @@ def test_sync_messages_uses_global_external_id_check():
     assert written == 0
     upsert.assert_called_once()
     assert upsert.call_args.kwargs.get("known_new") is not True
+
+
+def test_ensure_conversa_closes_old_thread_on_new_brevo_id():
+    bridge = AiConversasBridge()
+    bridge.conversas = MagicMock()
+    old = {
+        "id": "conversa-old",
+        "external_thread_id": "old-brevo-thread",
+        "contact_phone": "whatsapp:5511999",
+        "assigned_to": "agent-1",
+        "bot_activated": False,
+        "status": "open",
+    }
+    bridge.conversas.obter_por_contato.return_value = old
+    bridge.conversas.criar.return_value = {
+        "id": "conversa-new",
+        "external_thread_id": "new-brevo-thread",
+        "contact_phone": "whatsapp:5511999",
+        "bot_activated": True,
+        "status": "active",
+    }
+
+    sample = {
+        "conversation_id": "new-brevo-thread",
+        "sender_key": "whatsapp:5511999",
+        "sender_phone": "5511999",
+        "channel": "whatsapp",
+        "text": "oi",
+        "created_at": "2026-09-01T10:00:00",
+    }
+    result = bridge._ensure_conversa("ws-1", "new-brevo-thread", sample)
+
+    bridge.conversas.atualizar.assert_called_once()
+    close_patch = bridge.conversas.atualizar.call_args[0][1]
+    assert close_patch["status"] == "closed"
+    assert close_patch.get("assigned_to") is None
+    assert close_patch.get("bot_activated") is True
+    bridge.conversas.criar.assert_called_once()
+    assert result["id"] == "conversa-new"

@@ -251,6 +251,29 @@ class AiConversasBridge:
                     by_id[row_id] = row
         return sorted(by_id.values(), key=lambda r: r.get("created_at") or "")
 
+    def _release_stale_takeover_conversa(
+        self,
+        conversa: dict,
+        workspace_id: str,
+    ) -> None:
+        """Close an old thread so assigned_to / bot_activated do not mute new inbound."""
+        conversa_id = str(conversa.get("id") or "")
+        if not conversa_id:
+            return
+        patch: dict[str, Any] = {"status": "closed"}
+        if conversa.get("assigned_to"):
+            patch["assigned_to"] = None
+        if conversa.get("bot_activated") is False:
+            patch["bot_activated"] = True
+        try:
+            self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
+        except Exception as exc:
+            logger.warning(
+                "Falha ao encerrar conversa antiga %s no novo thread: %s",
+                conversa_id,
+                exc,
+            )
+
     def _ensure_conversa(
         self,
         workspace_id: str,
@@ -281,6 +304,21 @@ class AiConversasBridge:
         channel = _channel(sample)
         last_text = sample.get("text") or sample.get("reply_text") or ""
         last_at = sample.get("created_at") or datetime.utcnow().isoformat()
+
+        if existing:
+            old_thread = str(existing.get("external_thread_id") or "").strip()
+            if (
+                conversation_id
+                and old_thread
+                and conversation_id != old_thread
+            ):
+                if index:
+                    for field in ("external_thread_id", "contact_phone"):
+                        value = str(existing.get(field) or "").strip()
+                        if value and value in index.by_identity:
+                            index.by_identity.pop(value, None)
+                self._release_stale_takeover_conversa(existing, workspace_id)
+                existing = None
 
         if existing:
             patch = {}
