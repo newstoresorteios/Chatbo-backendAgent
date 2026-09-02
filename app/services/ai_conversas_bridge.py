@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -42,11 +43,35 @@ def _thread_key(row: dict) -> str | None:
     return None
 
 
+_NICK_COLOR_WORDS = frozenset({
+    "blue", "red", "black", "white", "green", "pink", "gold", "silver",
+    "dark", "light", "orange", "yellow", "purple", "grey", "gray",
+})
+_NICK_DESCRIPTOR_WORDS = frozenset({
+    "razor", "wolf", "dragon", "shadow", "killer", "master", "king", "queen",
+    "devil", "ghost", "ninja", "storm", "fire", "ice", "star", "moon", "sun",
+    "sky", "rock", "steel", "blade", "hunter", "player", "gamer", "bot",
+})
+
+
+def _fold_name(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", value).lower()
+    return "".join(ch for ch in folded if not unicodedata.combining(ch))
+
+
 def _is_placeholder_name(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
         return True
-    return bool(re.match(r"^(contato|cliente)\s+\S+$", text, re.I))
+    if re.match(r"^(contato|cliente)\s+\S+$", text, re.I):
+        return True
+    words = [_fold_name(part) for part in text.split() if part.strip()]
+    if not words:
+        return True
+    nick_markers = _NICK_COLOR_WORDS | _NICK_DESCRIPTOR_WORDS
+    if any(word in nick_markers for word in words):
+        return True
+    return False
 
 
 def _customer_display_name(sample: dict, *, key: str = "", existing: str | None = None) -> str:

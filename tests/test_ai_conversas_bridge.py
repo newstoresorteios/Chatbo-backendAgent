@@ -102,6 +102,25 @@ def test_display_name_keeps_good_existing_name():
     ) == "Maria Silva"
 
 
+def test_display_name_drops_brevo_color_nicks():
+    assert _customer_display_name(
+        {
+            "channel": "whatsapp",
+            "sender_name": "Dark Orange",
+            "sender_phone": "5585999498149",
+        },
+        key="whatsapp:5585999498149",
+    ) == "5585999498149"
+    assert _customer_display_name(
+        {
+            "channel": "whatsapp",
+            "sender_name": "Razor Blue",
+            "sender_phone": "5548999490859",
+        },
+        key="whatsapp:5548999490859",
+    ) == "5548999490859"
+
+
 def test_is_duplicate_external_id_error():
     exc = Exception(
         'duplicate key value violates unique constraint "idx_mensagens_external_id_unique"'
