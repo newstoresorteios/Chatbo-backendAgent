@@ -67,6 +67,16 @@ def test_missing_workspace_never_expands_contact_history():
     assert AiConversasBridge()._load_thread_rows({"external_thread_id": "thread-a"}) == ([], [])
 
 
+def test_long_session_history_is_not_truncated_at_one_thousand_messages(monkeypatch):
+    rows = [{"id": n, "workspace_id": "ws-a", "conversation_id": "thread-a"} for n in range(1205)]
+    monkeypatch.setattr("app.services.ai_conversas_bridge.supabase", SimpleNamespace(table=lambda _name: Query(rows)))
+    bridge = AiConversasBridge()
+    bridge._query_ai_in = MagicMock(return_value=[])
+    inbound, _ = bridge._load_thread_rows({"workspace_id": "ws-a", "external_thread_id": "thread-a"})
+    assert len(inbound) == 1205
+    assert [row["id"] for row in inbound] == list(range(1205))
+
+
 def test_scoped_query_failure_does_not_retry_without_scope(monkeypatch):
     bridge = AiConversasBridge()
     bridge._query_ai = MagicMock(side_effect=AssertionError("unscoped fallback"))

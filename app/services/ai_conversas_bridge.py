@@ -496,11 +496,19 @@ class AiConversasBridge:
             return [], []
 
         if thread:
-            query = (supabase.table("ai_inbound_messages").select("*")
-                .eq("workspace_id", workspace_id).eq("conversation_id", thread))
-            if conversa.get("channel"):
-                query = query.eq("channel", _channel(conversa))
-            inbounds = query.order("created_at", desc=False).limit(1000).execute().data or []
+            inbounds = []
+            offset = 0
+            while True:
+                query = (supabase.table("ai_inbound_messages").select("*")
+                    .eq("workspace_id", workspace_id).eq("conversation_id", thread))
+                if conversa.get("channel"):
+                    query = query.eq("channel", _channel(conversa))
+                page = (query.order("created_at", desc=False).order("id")
+                        .range(offset, offset + 499).execute().data or [])
+                inbounds.extend(page)
+                if len(page) < 500:
+                    break
+                offset += 500
             inbound_ids = [str(row["id"]) for row in inbounds]
             responses = self._query_ai_in("ai_agent_responses", "inbound_id", inbound_ids, workspace_id=workspace_id)
             return inbounds, responses
