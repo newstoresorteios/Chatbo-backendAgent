@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.core.auth import obter_usuario_atual
-from app.schemas.agent_registry import WorkspaceAgentUpdate
+from app.schemas.agent_registry import AgentConfigurationPublish, WorkspaceAgentUpdate
 from app.services.agent_registry_service import agent_registry_service
 
 router = APIRouter()
@@ -27,3 +27,24 @@ def atualizar_agente_atual(
         usuario,
         body.model_dump(exclude_unset=True),
     )
+
+
+@router.get("/agents/current/configuration")
+def obter_configuracao_agente(usuario: dict = Depends(obter_usuario_atual)):
+    return agent_registry_service.obter_configuracao(usuario)
+
+
+@router.put("/agents/current/configuration")
+def publicar_configuracao_agente(
+    body: AgentConfigurationPublish,
+    usuario: dict = Depends(obter_usuario_atual),
+):
+    return agent_registry_service.publicar_configuracao(
+        usuario,
+        body.model_dump(),
+    )
+
+
+@router.get("/agents/current/configuration/history")
+def listar_historico_configuracao(usuario: dict = Depends(obter_usuario_atual)):
+    return agent_registry_service.listar_historico_configuracao(usuario)

@@ -56,3 +56,36 @@ class AgentRegistryRepository:
             updated = self.atualizar(workspace_id, payload)
             return updated or existente
         return self.criar({"workspace_id": workspace_id, **payload})
+
+    def publicar_configuracao(
+        self,
+        *,
+        workspace_id: str,
+        configuration: dict,
+        created_by: str,
+        expected_version: int,
+    ) -> dict:
+        resposta = supabase.rpc(
+            "publish_workspace_agent_config",
+            {
+                "p_workspace_id": workspace_id,
+                "p_configuration": configuration,
+                "p_created_by": created_by,
+                "p_expected_version": expected_version,
+            },
+        ).execute()
+        data = resposta.data
+        if isinstance(data, list):
+            return data[0] if data else {}
+        return data or {}
+
+    def listar_versoes_configuracao(self, workspace_id: str, limit: int = 20) -> list[dict]:
+        resposta = (
+            supabase.table("workspace_agent_config_versions")
+            .select("id,version,schema_version,configuration,created_by,created_at")
+            .eq("workspace_id", workspace_id)
+            .order("version", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return resposta.data or []
