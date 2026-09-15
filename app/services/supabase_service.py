@@ -51,6 +51,9 @@ def _validated_supabase_url(url: str) -> str:
 
 
 def get_supabase() -> Client:
+    import sys
+    if "pytest" in sys.modules:
+        raise RuntimeError("Real Supabase access is disabled in unit tests; inject a repository/client.")
     global _client
     if _client is None:
         if not SUPABASE_URL or not SUPABASE_KEY:
@@ -70,6 +73,8 @@ def get_supabase() -> Client:
 
 class _SupabaseProxy:
     def __getattr__(self, name: str):
+        if name.startswith("__") or name.startswith("_is_"):
+            raise AttributeError(name)
         return getattr(get_supabase(), name)
 
 

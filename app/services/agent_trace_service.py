@@ -66,6 +66,8 @@ class AgentTraceService:
             "safetyReason": row.get("safety_reason"),
             "personaVersionId": persona.get("persona_version_id"),
             "configurationKeys": list(persona.get("runtime_configuration_keys") or []),
+            "configurationVersion": persona.get("configuration_version"),
+            "configurationCount": persona.get("runtime_configuration_count"),
             "createdAt": row.get("created_at"),
             "responseSource": metadata.get("response_source"),
         }
@@ -110,10 +112,15 @@ class AgentTraceService:
             items = [item for item in items if item["outcome"] == outcome]
         has_next = has_more_rows or len(items) > limit
         items = items[:limit]
+        # When a filtered scan contains more matches than one page, resume after
+        # the last returned item so the remaining scanned matches are not lost.
+        cursor_item = items[-1] if items else None
+        next_cursor = (f"{cursor_item['createdAt']}|{cursor_item['id']}" if cursor_item
+                       else f"{scanned[-1]['created_at']}|{scanned[-1]['id']}" if scanned else None)
         return {
             "items": items,
             "hasNext": has_next,
-            "nextCursor": scanned[-1].get("created_at") if has_next and scanned else None,
+            "nextCursor": next_cursor if has_next else None,
         }
 
     def obter(self, usuario: dict, response_id: int) -> dict:
@@ -133,6 +140,7 @@ class AgentTraceService:
             "llmCalls": list(runtime.get("openai_calls") or []),
             "llmCallsByType": _dict(runtime.get("llm_calls_by_type")),
             "trayTools": list(runtime.get("tray_tools") or []),
+            "catalogQueries": list(runtime.get("catalog_queries") or []),
             "integrationFailures": _dict(runtime.get("integration_failures")),
             "inbound": _dict(runtime.get("inbound")),
             "context": _dict(runtime.get("context")),

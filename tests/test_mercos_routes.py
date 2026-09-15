@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.auth import obter_token_payload
+from app.core.auth import obter_token_payload, obter_usuario_atual
+from app.core.workspace_scope import obter_company_context
 from app.services.mercos_service import MercosService
 from main import app
 
@@ -25,7 +26,10 @@ PEDIDO_VALIDO = {
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr("app.services.mercos_service.MERCOS_APPLICATION_TOKEN", "test-token")
+    monkeypatch.setattr("app.services.mercos_service.MERCOS_COMPANY_TOKEN", "test-token")
+    monkeypatch.setattr("app.services.mercos_service.MERCOS_BASE_URL", "https://example.invalid")
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -41,6 +45,8 @@ def _auth_as(role: str):
         }
 
     app.dependency_overrides[obter_token_payload] = _payload
+    app.dependency_overrides[obter_usuario_atual] = lambda: {"id": "user-1", "perfil": role}
+    app.dependency_overrides[obter_company_context] = lambda: {"workspaceId": "workspace-test", "workspaceRole": "owner"}
 
 
 def test_listar_clientes(client):
@@ -60,7 +66,7 @@ def test_listar_produtos(client):
 
 
 def test_listar_pedidos(client):
-    _auth_as("user")
+    _auth_as("supervisor")
     with patch.object(MercosService, "listar_pedidos", return_value=[{"id": 3}]):
         resp = client.get("/api/mercos/pedidos")
     assert resp.status_code == 200

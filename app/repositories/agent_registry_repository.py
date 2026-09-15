@@ -4,6 +4,11 @@ from app.services.supabase_service import supabase
 
 
 class AgentRegistryRepository:
+    def listar_configuracoes(self) -> list[dict]:
+        rows = (supabase.table("agent_configuration_catalog").select("definition")
+                .order("key").execute().data or [])
+        return [row["definition"] for row in rows]
+
     def listar_tipos(self) -> list[dict]:
         resposta = (
             supabase.table("agent_runtime_types")

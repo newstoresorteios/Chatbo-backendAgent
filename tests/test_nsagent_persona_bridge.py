@@ -1,6 +1,18 @@
 from app.services.nsagent_persona_bridge import compile_instructions
 
 
+def test_invalid_fixture_identity_is_rejected_before_any_database_access():
+    import pytest
+    from app.services.nsagent_persona_bridge import NsAgentPersonaBridge
+    with pytest.raises(ValueError, match="invalid_persona_workspace_link"):
+        NsAgentPersonaBridge().publish_active({"id": "persona-1", "workspace_id": "workspace-a"})
+
+
+def test_supabase_proxy_introspection_does_not_open_a_connection():
+    from app.services.supabase_service import supabase
+    assert not hasattr(supabase, "__func__")
+
+
 def test_compile_instructions_includes_core_fields():
     text = compile_instructions(
         {

@@ -2,9 +2,7 @@ from copy import deepcopy
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
 
-from app.schemas.agent_registry import AgentRuntimeConfiguration
 from app.services import agent_registry_service as module
 from app.services.agent_registry_service import AgentRegistryService
 
@@ -25,6 +23,13 @@ class FakeRepository:
             "updated_at": "2026-09-14T12:00:00+00:00",
         }
         self.published = None
+
+    def listar_configuracoes(self):
+        return [
+            {"key": "historyTurns", "label": "Hist?rico", "type": "integer", "min": 4, "max": 40, "default": 12},
+            {"key": "catalogShortlistSize", "label": "Produtos", "type": "integer", "min": 1, "max": 5, "default": 3},
+            {"key": "maxReplyChars", "label": "Resposta", "type": "integer", "min": 300, "max": 4000, "default": 900},
+        ]
 
     def obter_por_workspace(self, workspace_id: str):
         assert workspace_id == "workspace-1"
@@ -67,7 +72,7 @@ def test_configuration_fills_defaults_and_exposes_schema(service):
 
 
 def test_publish_is_validated_versioned_and_attributed(service):
-    values = AgentRuntimeConfiguration(historyTurns=20).model_dump()
+    values = {"historyTurns": 20}
     result = service.publicar_configuracao(
         {"id": "user-1"},
         {"expectedVersion": 2, "values": values},
@@ -80,9 +85,10 @@ def test_publish_is_validated_versioned_and_attributed(service):
     assert service.repo.published["configuration"]["legacyProvider"] == "brevo"
 
 
-def test_configuration_rejects_unknown_or_unsafe_fields():
-    with pytest.raises(ValidationError):
-        AgentRuntimeConfiguration.model_validate({"openaiApiKey": "secret"})
+def test_configuration_rejects_unknown_or_unsafe_fields(service):
+    with pytest.raises(HTTPException) as error:
+        service.publicar_configuracao({"id": "user-1"}, {"expectedVersion": 2, "values": {"openaiApiKey": "secret"}})
+    assert error.value.status_code == 422
 
 
 def test_legacy_agent_update_cannot_bypass_validation(service):

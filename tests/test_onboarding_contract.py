@@ -88,8 +88,9 @@ class OnboardingContractTest(unittest.TestCase):
 
     def test_initial_state_and_company_operation_requirements(self):
         state = self.service.obter_onboarding(self.user)
-        self.assertEqual(state["status"], "pending")
-        self.assertEqual(state["currentStep"], "empresa")
+        # The wizard was retired; readiness remains independently observable.
+        self.assertEqual(state["status"], "complete")
+        self.assertEqual(state["currentStep"], "ativacao")
         self.assertFalse(state["requirements"]["companyConfigured"])
         self.configure_company_operation()
         requirements = self.service.obter_onboarding(self.user)["requirements"]
@@ -132,7 +133,7 @@ class OnboardingContractTest(unittest.TestCase):
         self.service.repo.tests.append({"status": "success", "persona_id": "persona-1"})
         result = self.service.ativar_onboarding(self.user)
         self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["completedSteps"], ["empresa", "operacao", "catalogo", "canais", "persona", "teste", "ativacao"])
+        self.assertEqual(result["completedSteps"], ["empresa", "operacao", "catalogo", "canais", "ativacao"])
 
     def test_supervisor_can_read_but_not_change(self):
         self.service.get_current_workspace_context = Mock(return_value={"workspaceId": "ws-1", "workspaceRole": "supervisor"})

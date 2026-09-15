@@ -114,10 +114,26 @@ def persona_payload(name: str = "NITRUS Consultivo") -> dict:
 
 
 class PersonaServiceTest(unittest.TestCase):
+    def test_failed_active_edit_preserves_profile_and_history(self):
+        from unittest.mock import patch
+        created = self.create_complete_persona()
+        self.repo.personas[created["id"]]["status"] = "active"
+        before = deepcopy(self.repo.personas)
+        history = deepcopy(self.repo.versions)
+        with patch("app.services.nsagent_persona_bridge.nsagent_persona_bridge.update_active", side_effect=RuntimeError("publish unavailable")):
+            with self.assertRaises(HTTPException) as caught:
+                self.service.atualizar(self.user, created["id"], {"toneDetails": "Novo tom"})
+        self.assertEqual(caught.exception.status_code, 502)
+        self.assertEqual(self.repo.personas, before)
+        self.assertEqual(self.repo.versions, history)
+
     def setUp(self):
         self.repo = FakePersonaRepository()
         self.ai = Mock(return_value="Resposta temporaria da persona.")
         self.service = PersonaService(repo=self.repo, ai_generator=self.ai)
+        # Unit fixtures must never publish to the real shared Supabase project.
+        self.service._publish_to_nsagent = Mock(return_value={"published": True, "version": 1})
+        self.service._archive_on_nsagent = Mock(return_value={"published": False})
         self.context = {
             "workspaceId": "workspace-a",
             "workspaceName": "NITRUS",

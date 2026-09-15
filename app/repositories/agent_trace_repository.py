@@ -1,4 +1,6 @@
 from app.services.supabase_service import supabase
+from datetime import datetime
+from fastapi import HTTPException
 
 
 TRACE_COLUMNS = (
@@ -19,14 +21,24 @@ class AgentTraceRepository:
         handoff: bool | None = None,
     ) -> list[dict]:
         query = (
-            supabase.table("ai_agent_responses")
+            supabase.table("ai_agent_trace_summaries")
             .select(TRACE_COLUMNS)
             .eq("workspace_id", workspace_id)
             .order("created_at", desc=True)
+            .order("id", desc=True)
             .limit(limit + 1)
         )
         if before:
-            query = query.lt("created_at", before)
+            try:
+                timestamp, separator, row_id = before.partition("|")
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).isoformat()
+                if separator:
+                    row_id = int(row_id)
+                    query = query.or_(f"created_at.lt.{timestamp},and(created_at.eq.{timestamp},id.lt.{row_id})")
+                else:
+                    query = query.lt("created_at", timestamp)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="Cursor de paginação inválido") from exc
         if channel:
             query = query.eq("channel", channel)
         if delivered is not None:

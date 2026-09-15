@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, UploadFile
 
@@ -20,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 PERSONA_VIEW_ROLES = {"owner", "admin", "supervisor"}
 MAX_FILE_BYTES = 5 * 1024 * 1024
-MAX_FILES_PER_PERSONA = 10
 
 
 class PersonaAttachmentService:
@@ -63,6 +63,8 @@ class PersonaAttachmentService:
             "extractedChars": len((row.get("extracted_text") or "").strip()),
             "createdAt": row.get("created_at"),
             "updatedAt": row.get("updated_at"),
+            "validUntil": row.get("valid_until"),
+            "contentHash": row.get("content_hash"),
         }
 
     def listar(self, usuario: dict, persona_id: str) -> dict:
@@ -93,13 +95,18 @@ class PersonaAttachmentService:
             raise HTTPException(status_code=400, detail=f"Content-Type não permitido: {content_type}")
 
         count = self.attachments.contar(persona_id, workspace_id)
-        if count >= MAX_FILES_PER_PERSONA:
+        from app.services.supabase_service import supabase
+        bundle = supabase.rpc("get_workspace_agent_bundle", {"p_workspace_id": workspace_id}).execute().data
+        if not isinstance(bundle, dict) or "agent_knowledge_attachment_limit" not in bundle.get("values", {}):
+            raise HTTPException(status_code=503, detail="Configuração de documentos indisponível.")
+        max_files = int(bundle["values"]["agent_knowledge_attachment_limit"])
+        if count >= max_files:
             raise HTTPException(
                 status_code=400,
-                detail=f"Limite de {MAX_FILES_PER_PERSONA} anexos por persona.",
+                detail=f"Limite de {max_files} anexos por persona.",
             )
 
-        content = await file.read()
+        content = await file.read(MAX_FILE_BYTES + 1)
         if not content:
             raise HTTPException(status_code=400, detail="Arquivo vazio.")
         if len(content) > MAX_FILE_BYTES:
@@ -154,6 +161,21 @@ class PersonaAttachmentService:
             except Exception as exc:
                 logger.warning("Republicação NSAgent após upload falhou: %s", exc)
 
+        return self._response(row)
+
+    def atualizar_validade(self, usuario: dict, persona_id: str, attachment_id: str, *, valid_until: datetime | None, expected_updated_at: datetime) -> dict:
+        context = self._context(usuario)
+        self._require_admin(context)
+        self._persona(context, persona_id)
+        if not self.attachments.buscar(attachment_id, persona_id, context["workspaceId"]):
+            raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+        if expected_updated_at.tzinfo is None or (valid_until is not None and valid_until.tzinfo is None):
+            raise HTTPException(status_code=422, detail="Informe data com fuso horário.")
+        row = self.attachments.atualizar_validade(attachment_id, context["workspaceId"],
+            valid_until=valid_until.astimezone(timezone.utc).isoformat() if valid_until else None,
+            expected_updated_at=expected_updated_at.isoformat())
+        if not row:
+            raise HTTPException(status_code=409, detail="O documento foi alterado por outro operador. Atualize a tela.")
         return self._response(row)
 
     def remover(self, usuario: dict, persona_id: str, attachment_id: str) -> dict:

@@ -1,29 +1,12 @@
 from fastapi import HTTPException
 
 from app.repositories.agent_registry_repository import AgentRegistryRepository
-from app.schemas.agent_registry import AgentRuntimeConfiguration
+from app.services.configuration_validation import validate_values
 from app.services.workspace_service import workspace_service
 
 WORKSPACE_ADMIN_ROLES = {"owner", "admin"}
 
-CONFIG_SCHEMA_VERSION = 1
-CONFIG_FIELDS = [
-    {"key": "maxReplyChars", "label": "Tamanho máximo da resposta", "description": "Limite de caracteres da resposta final.", "type": "integer", "group": "Respostas", "min": 300, "max": 4000, "step": 100},
-    {"key": "historyTurns", "label": "Turnos no histórico", "description": "Quantidade de mensagens anteriores enviadas ao modelo.", "type": "integer", "group": "Contexto", "min": 4, "max": 40, "step": 1},
-    {"key": "catalogShortlistSize", "label": "Produtos apresentados", "description": "Máximo de opções mostradas ao cliente por resposta.", "type": "integer", "group": "Catálogo", "min": 1, "max": 5, "step": 1},
-    {"key": "catalogCandidatePool", "label": "Candidatos de busca", "description": "Quantidade de produtos avaliados antes do ranqueamento.", "type": "integer", "group": "Catálogo", "min": 5, "max": 80, "step": 5},
-    {"key": "catalogRerankLimit", "label": "Candidatos para reranking", "description": "Quantidade de produtos enviados para a seleção final.", "type": "integer", "group": "Catálogo", "min": 5, "max": 20, "step": 1},
-    {"key": "observabilityLevel", "label": "Nível dos logs", "description": "Detalhado amplia diagnósticos, mantendo a redação de dados sensíveis.", "type": "select", "group": "Observabilidade", "options": [{"value": "standard", "label": "Padrão"}, {"value": "detailed", "label": "Detalhado"}]},
-    {"key": "learningEnabled", "label": "Revisar atendimentos", "description": "Permite que o NSAgent transforme sinais dos atendimentos em propostas de aprendizado.", "type": "boolean", "group": "Aprendizado"},
-    {"key": "learningAutoPromote", "label": "Criar instruções automaticamente", "description": "Cria extensões pendentes a partir de insights aprovados pela constituição do agente.", "type": "boolean", "group": "Aprendizado"},
-    {"key": "learningAutoActivate", "label": "Ativação automática", "description": "Permite ativação sem gate humano. Mantenha desligado para revisão operacional.", "type": "boolean", "group": "Aprendizado"},
-    {"key": "learningLookbackHours", "label": "Janela de análise", "description": "Horas consideradas ao iniciar ou recompor o ciclo de aprendizado.", "type": "integer", "group": "Aprendizado", "min": 1, "max": 168, "step": 1},
-    {"key": "learningBatchLimit", "label": "Atendimentos por ciclo", "description": "Limite de respostas avaliadas em cada execução do aprendizado.", "type": "integer", "group": "Aprendizado", "min": 50, "max": 2000, "step": 50},
-    {"key": "learningMaxClusters", "label": "Problemas por ciclo", "description": "Máximo de grupos de falha enviados para reflexão em cada ciclo.", "type": "integer", "group": "Aprendizado", "min": 1, "max": 20, "step": 1},
-    {"key": "learningCanaryHours", "label": "Duração do canário", "description": "Tempo de observação de uma instrução ativada automaticamente.", "type": "integer", "group": "Canário e rollback", "min": 1, "max": 72, "step": 1},
-    {"key": "learningRollbackMinReviews", "label": "Amostra mínima", "description": "Quantidade mínima de revisões antes de confirmar ou reverter um canário.", "type": "integer", "group": "Canário e rollback", "min": 5, "max": 500, "step": 5},
-    {"key": "learningRollbackFailLift", "label": "Limite de piora", "description": "Multiplicador da taxa de falha que dispara rollback automático.", "type": "number", "group": "Canário e rollback", "min": 1, "max": 3, "step": 0.1},
-]
+CONFIG_SCHEMA_VERSION = 2
 
 
 class AgentRegistryService:
@@ -58,18 +41,21 @@ class AgentRegistryService:
             "configurationVersion": int(row.get("config_version") or 0),
         }
 
-    def _configuration_values(self, row: dict | None) -> AgentRuntimeConfiguration:
+    def _configuration_values(self, row: dict | None, fields: list[dict]) -> dict:
         raw = (row or {}).get("configuration") or {}
         runtime = raw.get("runtime", raw) if isinstance(raw, dict) else {}
         values = runtime.get("values") if isinstance(runtime, dict) else {}
-        return AgentRuntimeConfiguration.model_validate(values or {})
+        return validate_values(values or {}, fields, current=values or {})
 
     def obter_configuracao(self, usuario: dict) -> dict:
         context = workspace_service.get_current_workspace_context(usuario)
         workspace_id = str(context["workspaceId"])
         try:
             row = self.repo.obter_por_workspace(workspace_id)
-            values = self._configuration_values(row)
+            fields = self.repo.listar_configuracoes()
+            if not fields:
+                raise HTTPException(status_code=503, detail="Catálogo de configuração ainda não publicado.")
+            values = self._configuration_values(row, fields)
         except Exception as exc:
             if self._missing_schema(exc):
                 raise HTTPException(status_code=503, detail="Execute supabase/024_agent_runtime_config.sql no Supabase.") from exc
@@ -77,8 +63,8 @@ class AgentRegistryService:
         return {
             "schemaVersion": CONFIG_SCHEMA_VERSION,
             "version": int((row or {}).get("config_version") or 0),
-            "values": values.model_dump(),
-            "fields": CONFIG_FIELDS,
+            "values": values,
+            "fields": fields,
             "updatedAt": (row or {}).get("updated_at"),
         }
 
@@ -87,17 +73,20 @@ class AgentRegistryService:
         if context.get("workspaceRole") not in WORKSPACE_ADMIN_ROLES:
             raise HTTPException(status_code=403, detail="Sem permissão para alterar a configuração do agente")
         workspace_id = str(context["workspaceId"])
-        values = AgentRuntimeConfiguration.model_validate(payload.get("values") or {})
         try:
             current = self.repo.obter_por_workspace(workspace_id) or {}
+            fields = self.repo.listar_configuracoes()
+            current_values = self._configuration_values(current, fields)
+            values = validate_values(payload.get("values") or {}, fields, current=current_values)
             existing = current.get("configuration") or {}
             if not isinstance(existing, dict):
                 existing = {}
             configuration = {
                 **existing,
+                "schemaVersion": CONFIG_SCHEMA_VERSION,
                 "runtime": {
                     "schemaVersion": CONFIG_SCHEMA_VERSION,
-                    "values": values.model_dump(),
+                    "values": values,
                 },
             }
             self.repo.publicar_configuracao(

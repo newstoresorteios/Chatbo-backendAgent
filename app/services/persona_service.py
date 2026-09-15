@@ -241,11 +241,11 @@ class PersonaService:
                 ),
             ) from exc
 
-    def _archive_on_nsagent(self) -> dict | None:
+    def _archive_on_nsagent(self, workspace_id: str) -> dict | None:
         from app.services.nsagent_persona_bridge import nsagent_persona_bridge
 
         try:
-            return nsagent_persona_bridge.archive_active()
+            return nsagent_persona_bridge.archive_active(workspace_id=workspace_id)
         except Exception as exc:
             logger.warning("Falha ao arquivar persona no NSAgent: %s", exc)
             return {"published": False, "error": str(exc)}
@@ -257,8 +257,21 @@ class PersonaService:
         if not persona:
             raise HTTPException(status_code=404, detail="Persona não encontrada.")
         db_payload = self._editable_to_db(payload, partial=True, current=persona)
+        expected_version = payload.get("expectedVersion")
+        if expected_version is not None and (type(expected_version) is not int or expected_version != int(persona.get("version") or 1)):
+            raise HTTPException(status_code=409, detail="A persona foi alterada por outro operador. Recarregue antes de salvar.")
         if not db_payload:
             return self._response(persona)
+        if persona.get("status") == "active":
+            from app.services.nsagent_persona_bridge import nsagent_persona_bridge
+            try:
+                publish = nsagent_persona_bridge.update_active(persona, db_payload, activated_by=str(usuario.get("id")))
+            except Exception as exc:
+                if "persona_version_conflict" in str(exc):
+                    raise HTTPException(status_code=409, detail="A persona foi alterada por outro operador. Recarregue antes de salvar.") from exc
+                raise HTTPException(status_code=502, detail="Não foi possível publicar a alteração. A persona anterior foi preservada.") from exc
+            updated = self.repo.buscar_por_id_workspace(persona_id, context["workspaceId"])
+            return {**self._response(updated), "nsAgentPublish": publish}
         updated = self.repo.atualizar(persona_id, context["workspaceId"], {
             **db_payload,
             "version": int(persona.get("version") or 1) + 1,
@@ -283,7 +296,7 @@ class PersonaService:
 
         if persona.get("status") == "active":
             # Republica no NSAgent (idempotente para recuperação).
-            draft_for_publish = {**persona, "version": int(persona.get("version") or 1) + 1}
+            draft_for_publish = persona
             publish = self._publish_to_nsagent(draft_for_publish, user_id=user_id)
             response = self._response(persona)
             response["nsAgentPublish"] = publish
@@ -296,6 +309,13 @@ class PersonaService:
             "status": "active",
         }
         publish = self._publish_to_nsagent(publish_source, user_id=user_id)
+
+        # The RPC has already activated the profile and recorded its snapshot.
+        if publish.get("profileVersion") is not None:
+            activated = self.repo.buscar_por_id_workspace(persona_id, context["workspaceId"])
+            response = self._response(activated)
+            response["nsAgentPublish"] = publish
+            return response
 
         current_active = self.repo.buscar_ativa(context["workspaceId"])
         if current_active and current_active.get("id") != persona_id:
@@ -336,7 +356,7 @@ class PersonaService:
             "deactivated_at": datetime.utcnow().isoformat(),
         })
         self._snapshot(updated, "deactivated", user_id)
-        archive = self._archive_on_nsagent()
+        archive = self._archive_on_nsagent(context["workspaceId"])
         response = self._response(updated)
         response["nsAgentPublish"] = archive
         return response

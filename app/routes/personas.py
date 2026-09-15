@@ -1,5 +1,7 @@
 from typing import Any
 import logging
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 
@@ -9,6 +11,20 @@ from app.services.persona_service import persona_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class AttachmentValidityUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    validUntil: datetime | None
+    expectedUpdatedAt: datetime
+
+
+@router.patch("/personas/{persona_id}/attachments/{attachment_id}")
+def atualizar_validade_anexo(persona_id: str, attachment_id: str, body: AttachmentValidityUpdate,
+                            usuario: dict = Depends(obter_usuario_atual)):
+    from app.services.persona_attachment_service import persona_attachment_service
+    return persona_attachment_service.atualizar_validade(usuario, persona_id, attachment_id,
+        valid_until=body.validUntil, expected_updated_at=body.expectedUpdatedAt)
 
 
 def _payload_dict(body: Any) -> dict:

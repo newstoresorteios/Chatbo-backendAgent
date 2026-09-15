@@ -93,3 +93,11 @@ def test_trace_from_another_workspace_is_not_found(service):
     with pytest.raises(HTTPException) as error:
         service.obter({}, 7)
     assert error.value.status_code == 404
+
+
+def test_filtered_pagination_resumes_after_last_returned_match(service):
+    service.repo.rows = [trace_row(response_id=i) for i in range(10, 3, -1)]
+    result = service.listar({}, limit=2, before=None, channel=None, outcome="delivered")
+    assert [row["id"] for row in result["items"]] == [10, 9]
+    assert result["hasNext"] is True
+    assert result["nextCursor"].endswith("|9")

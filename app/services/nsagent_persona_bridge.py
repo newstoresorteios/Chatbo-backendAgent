@@ -131,8 +131,7 @@ def compile_instructions(persona: dict, knowledge_docs: list[dict] | None = None
     profile = _clean(persona.get("customer_profile"))
 
     parts: list[str] = [
-        f"Você é {name}, {role} da New Store.",
-        "Responda sempre em português do Brasil, de forma natural, clara e factual.",
+        f"Identidade configurada: {name}. Função: {role}. Idioma: {language}.",
         "Use apenas informações confiáveis do contexto/ferramentas. Não invente preço, estoque, prazo ou status de pedido.",
         "Quando faltar dado confiável, diga que precisa confirmar antes de responder.",
     ]
@@ -244,105 +243,76 @@ class NsAgentPersonaBridge:
             logger.warning("Não foi possível carregar anexos da persona %s: %s", persona_id, exc)
             return []
 
-    def _next_version(self) -> int:
-        rows = (
-            supabase.table("ai_agent_persona_versions")
-            .select("version")
-            .eq("tenant_id", self.tenant_id)
-            .eq("persona_key", self.persona_key)
-            .order("version", desc=True)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not rows:
-            return 1
-        return int(rows[0].get("version") or 0) + 1
-
-    def _archive_active(self) -> int:
-        now = datetime.now(timezone.utc).isoformat()
-        active = (
-            supabase.table("ai_agent_persona_versions")
-            .select("id")
-            .eq("tenant_id", self.tenant_id)
-            .eq("persona_key", self.persona_key)
-            .eq("status", "active")
-            .execute()
-            .data
-            or []
-        )
-        for row in active:
-            supabase.table("ai_agent_persona_versions").update(
-                {"status": "archived", "archived_at": now}
-            ).eq("id", row["id"]).execute()
-        return len(active)
-
     def publish_active(self, persona: dict, *, activated_by: str | None = None) -> dict:
-        """Cria nova versão ativa no formato do NSAgent."""
-        knowledge_docs = self._load_knowledge_docs(persona)
-        instructions = compile_instructions(persona, knowledge_docs)
+        """Validate real identity before compiling, then publish atomically in Postgres."""
+        from uuid import UUID
+        from app.repositories.persona_repository import PersonaRepository
+
+        try:
+            persona_id = str(UUID(str(persona.get("id") or "")))
+            workspace_id = str(UUID(str(persona.get("workspace_id") or "")))
+        except ValueError as exc:
+            raise ValueError("invalid_persona_workspace_link") from exc
+        stored = PersonaRepository().buscar_por_id_workspace(persona_id, workspace_id)
+        if not stored:
+            raise ValueError("invalid_persona_workspace_link")
+        expected = int(stored.get("version") or 1)
+        # Legacy activation callers passed the upcoming version; compilation
+        # always uses the locked, persisted profile, never arbitrary caller text.
+        if int(persona.get("version") or 1) not in {expected, expected + 1}:
+            raise ValueError("persona_version_conflict")
+        knowledge_docs = self._load_knowledge_docs(stored)
+        instructions = compile_instructions(stored, knowledge_docs)
         if len(instructions) < 40:
             raise ValueError("instructions_too_short")
+        result = supabase.rpc("publish_nsagent_persona", {
+            "p_workspace_id": workspace_id,
+            "p_persona_id": persona_id,
+            "p_expected_profile_version": expected,
+            "p_tenant_id": self.tenant_id,
+            "p_persona_key": self.persona_key,
+            "p_instructions": instructions,
+            "p_instructions_hash": _hash(instructions),
+            "p_activated_by": activated_by,
+            "p_knowledge_docs": len(knowledge_docs),
+        }).execute().data
+        if isinstance(result, list):
+            result = result[0] if result else None
+        if not isinstance(result, dict) or not result.get("published"):
+            raise RuntimeError("persona_publish_failed")
+        return {**result, "tenantId": self.tenant_id, "personaKey": self.persona_key,
+                "instructionsChars": len(instructions)}
 
-        archived = self._archive_active()
-        version = self._next_version()
-        now = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "tenant_id": self.tenant_id,
-            "persona_key": self.persona_key,
-            "version": version,
-            "name": _clean(persona.get("name")) or "NewStore Commercial",
-            "source": "user",
-            "instructions": instructions,
-            "instructions_hash": _hash(instructions),
-            "status": "active",
-            "created_by": activated_by,
-            "activated_by": activated_by,
-            "activated_at": now,
-            "archived_at": None,
-            "metadata": {
-                "chatboPersonaId": str(persona.get("id") or ""),
-                "chatboWorkspaceId": str(persona.get("workspace_id") or ""),
-                "chatboVersion": int(persona.get("version") or 1),
-                "publishedFrom": "chatbo-backendAgent",
-                "knowledgeDocs": len(knowledge_docs),
-            },
-        }
-        created = (
-            supabase.table("ai_agent_persona_versions")
-            .insert(payload)
-            .execute()
-            .data
-            or []
-        )
-        row = created[0] if created else payload
-        logger.info(
-            "NSAgent persona published tenant=%s key=%s version=%s archived=%s chatbo=%s",
-            self.tenant_id,
-            self.persona_key,
-            version,
-            archived,
-            persona.get("id"),
-        )
-        return {
-            "published": True,
-            "tenantId": self.tenant_id,
-            "personaKey": self.persona_key,
-            "version": version,
-            "nsAgentPersonaId": row.get("id"),
-            "archivedPrevious": archived,
-            "instructionsChars": len(instructions),
-        }
+    def archive_active(self, *, workspace_id: str) -> dict:
+        from uuid import UUID
+        workspace_id = str(UUID(workspace_id))
+        rows = (supabase.table("ai_agent_persona_versions")
+                .update({"status": "archived", "archived_at": datetime.now(timezone.utc).isoformat()})
+                .eq("tenant_id", self.tenant_id).eq("persona_key", self.persona_key)
+                .eq("workspace_id", workspace_id).eq("status", "active").execute().data or [])
+        return {"published": False, "archivedPrevious": len(rows),
+                "tenantId": self.tenant_id, "personaKey": self.persona_key}
 
-    def archive_active(self) -> dict:
-        archived = self._archive_active()
-        return {
-            "published": False,
-            "archivedPrevious": archived,
-            "tenantId": self.tenant_id,
-            "personaKey": self.persona_key,
-        }
+    def update_active(self, persona: dict, patch: dict, *, activated_by: str) -> dict:
+        """Compile a proposed edit; profile, history and activation commit together."""
+        from uuid import UUID
+        workspace_id = str(UUID(str(persona["workspace_id"])))
+        persona_id = str(UUID(str(persona["id"])))
+        proposed = {**persona, **patch}
+        docs = self._load_knowledge_docs(persona)
+        instructions = compile_instructions(proposed, docs)
+        result = supabase.rpc("update_and_publish_nsagent_persona", {
+            "p_workspace_id": workspace_id, "p_persona_id": persona_id,
+            "p_expected_profile_version": int(persona["version"]), "p_patch": patch,
+            "p_tenant_id": self.tenant_id, "p_persona_key": self.persona_key,
+            "p_instructions": instructions, "p_instructions_hash": _hash(instructions),
+            "p_activated_by": activated_by, "p_knowledge_docs": len(docs),
+        }).execute().data
+        if isinstance(result, list):
+            result = result[0] if result else None
+        if not isinstance(result, dict) or not result.get("published"):
+            raise RuntimeError("persona_publish_failed")
+        return result
 
 
 nsagent_persona_bridge = NsAgentPersonaBridge()

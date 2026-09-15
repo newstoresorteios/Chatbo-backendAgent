@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.services.supabase_service import supabase
 
@@ -18,11 +18,12 @@ class PersonaAttachmentRepository:
     def listar_processados(self, persona_id: str, workspace_id: str) -> list[dict]:
         resposta = (
             supabase.table("agent_persona_attachments")
-            .select("id,filename,extracted_text,status,byte_size")
+            .select("id,filename,extracted_text,status,byte_size,content_hash,valid_until")
             .eq("persona_id", persona_id)
             .eq("workspace_id", workspace_id)
             .eq("status", "processed")
-            .order("created_at", desc=False)
+            .or_(f"valid_until.is.null,valid_until.gt.{datetime.now(timezone.utc).isoformat()}")
+            .order("updated_at", desc=True)
             .execute()
         )
         return resposta.data or []
@@ -44,6 +45,13 @@ class PersonaAttachmentRepository:
         resposta = supabase.table("agent_persona_attachments").insert(payload).execute()
         rows = resposta.data or []
         return rows[0] if rows else payload
+
+    def atualizar_validade(self, attachment_id: str, workspace_id: str, *, valid_until: str | None, expected_updated_at: str) -> dict | None:
+        rows = (supabase.table("agent_persona_attachments")
+                .update({"valid_until": valid_until, "updated_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", attachment_id).eq("workspace_id", workspace_id)
+                .eq("updated_at", expected_updated_at).execute().data or [])
+        return rows[0] if rows else None
 
     def atualizar(self, attachment_id: str, workspace_id: str, payload: dict) -> dict:
         resposta = (
