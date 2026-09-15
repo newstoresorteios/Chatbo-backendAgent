@@ -1,6 +1,6 @@
 """Sincroniza threads do NSAgent (ai_inbound_messages / ai_agent_responses) → conversas/mensagens.
 
-As tabelas do NSAgentForSorteios não têm workspace_id; o escopo é por tenant único (New Store).
+O escopo é o workspace persistido em cada entrada e resposta.
 Threads preferem conversation_id (Brevo), com fallback em sender_key / telefone.
 
 A lista da Central só materializa conversas (metadados). O histórico completo
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 INBOUND_LIST_COLUMNS = (
     "id,created_at,conversation_id,sender_key,sender_phone,visitor_id,"
-    "sender_name,sender_username,channel,text,channel_metadata"
+    "sender_name,sender_username,channel,text,channel_metadata,workspace_id"
 )
 RESPONSE_LIST_COLUMNS = (
-    "id,created_at,sender_key,sender_phone,reply_text,channel,inbound_id"
+    "id,created_at,sender_key,sender_phone,reply_text,channel,inbound_id,workspace_id"
 )
 INBOX_PAGE_SIZE = 500
 INBOX_MAX_ROWS = 2500
@@ -133,23 +133,23 @@ class _ConversaIndex:
     """Índice em memória para não consultar conversas N vezes no sync da inbox."""
 
     def __init__(self, rows: list[dict]) -> None:
-        self.by_identity: dict[str, dict] = {}
+        self.by_identity: dict[tuple[str, str], dict] = {}
         for row in rows:
             self.add(row)
 
     def add(self, row: dict | None) -> None:
-        if not row:
+        if not row or row.get("merged_into"):
             return
         for field in ("external_thread_id", "contact_phone"):
             value = str(row.get(field) or "").strip()
             if value:
-                self.by_identity[value] = row
+                self.by_identity[(_channel(row), value)] = row
 
-    def find(self, *keys: str | None) -> dict | None:
+    def find(self, *keys: str | None, channel: str = "whatsapp") -> dict | None:
         for key in keys:
             if not key:
                 continue
-            found = self.by_identity.get(str(key).strip())
+            found = self.by_identity.get((channel, str(key).strip()))
             if found:
                 return found
         return None
@@ -183,6 +183,7 @@ class AiConversasBridge:
         *,
         columns: str = "*",
         limit: int = 1000,
+        workspace_id: str | None = None,
     ) -> list[dict]:
         keys = _unique(values)
         if not keys:
@@ -191,20 +192,24 @@ class AiConversasBridge:
         for offset in range(0, len(keys), IN_QUERY_CHUNK):
             chunk = keys[offset : offset + IN_QUERY_CHUNK]
             try:
-                resposta = (
+                query = (
                     supabase.table(table)
                     .select(columns)
                     .in_(column, chunk)
                     .order("created_at", desc=False)
                     .limit(limit)
-                    .execute()
                 )
+                if workspace_id:
+                    query = query.eq("workspace_id", workspace_id)
+                resposta = query.execute()
                 for row in resposta.data or []:
                     row_id = row.get("id")
                     if row_id is not None:
                         by_id[row_id] = row
             except Exception as exc:
                 logger.warning("Falha ao ler %s.%s IN(%s): %s", table, column, len(chunk), exc)
+                if workspace_id:
+                    continue
                 for value in chunk:
                     for row in self._query_ai(table, column, value, limit=min(limit, 200)):
                         row_id = row.get("id")
@@ -219,20 +224,23 @@ class AiConversasBridge:
         columns: str = "*",
         page_size: int = INBOX_PAGE_SIZE,
         max_rows: int = INBOX_MAX_ROWS,
+        workspace_id: str | None = None,
     ) -> list[dict]:
-        """Lista recente sem filtro de workspace (schema NSAgent), com paginação."""
+        """Lista recente com paginação e escopo resolvido pelo servidor."""
         rows: list[dict] = []
         offset = 0
         while offset < max_rows:
             try:
                 end = offset + page_size - 1
-                resposta = (
+                query = (
                     supabase.table(table)
                     .select(columns)
                     .order("created_at", desc=True)
                     .range(offset, end)
-                    .execute()
                 )
+                if workspace_id:
+                    query = query.eq("workspace_id", workspace_id)
+                resposta = query.execute()
                 batch = resposta.data or []
                 rows.extend(batch)
                 if len(batch) < page_size:
@@ -311,12 +319,12 @@ class AiConversasBridge:
             sample.get("sender_key") or sample.get("sender_phone") or key
         ).strip()
 
-        existing = index.find(conversation_id, sender_key, key) if index else None
+        existing = index.find(conversation_id, sender_key, key, channel=_channel(sample)) if index else None
         if existing is None:
             existing = (
-                self.conversas.obter_por_contato(conversation_id, workspace_id=workspace_id)
-                or self.conversas.obter_por_contato(sender_key, workspace_id=workspace_id)
-                or self.conversas.obter_por_contato(key, workspace_id=workspace_id)
+                self.conversas.obter_por_contato(conversation_id, workspace_id=workspace_id, channel=_channel(sample))
+                or self.conversas.obter_por_contato(sender_key, workspace_id=workspace_id, channel=_channel(sample))
+                or self.conversas.obter_por_contato(key, workspace_id=workspace_id, channel=_channel(sample))
             )
             if index:
                 index.add(existing)
@@ -340,8 +348,8 @@ class AiConversasBridge:
                 if index:
                     for field in ("external_thread_id", "contact_phone"):
                         value = str(existing.get(field) or "").strip()
-                        if value and value in index.by_identity:
-                            index.by_identity.pop(value, None)
+                        if value:
+                            index.by_identity.pop((_channel(existing), value), None)
                 self._release_stale_takeover_conversa(existing, workspace_id)
                 existing = None
 
@@ -413,17 +421,6 @@ class AiConversasBridge:
             if _is_duplicate_external_id_error(exc):
                 logger.debug("Mensagem %s já existe (external_id duplicado)", external_id)
                 return False
-            if "workspace_id" in str(exc).lower():
-                stamped.pop("workspace_id", None)
-                try:
-                    self.mensagens.criar(stamped)
-                    return True
-                except Exception as exc2:
-                    if _is_duplicate_external_id_error(exc2):
-                        logger.debug("Mensagem %s já existe (external_id duplicado)", external_id)
-                        return False
-                    logger.warning("Falha ao gravar %s: %s", external_id, exc2)
-                    return False
             logger.warning("Falha ao gravar %s: %s", external_id, exc)
             return False
 
@@ -490,11 +487,24 @@ class AiConversasBridge:
         )
 
     def _load_thread_rows(self, conversa: dict) -> tuple[list[dict], list[dict]]:
-        keys = _identity_keys(conversa)
+        workspace_id = conversa.get("workspace_id")
+        thread = str(conversa.get("external_thread_id") or "").strip()
+        keys = [thread] if thread else _identity_keys(conversa)
+        if not workspace_id:
+            return [], []
         if not keys:
             return [], []
 
-        inbounds = self._fetch_inbounds_for_keys(keys)
+        if thread:
+            query = (supabase.table("ai_inbound_messages").select("*")
+                .eq("workspace_id", workspace_id).eq("conversation_id", thread))
+            if conversa.get("channel"):
+                query = query.eq("channel", _channel(conversa))
+            inbounds = query.order("created_at", desc=False).limit(1000).execute().data or []
+            inbound_ids = [str(row["id"]) for row in inbounds]
+            responses = self._query_ai_in("ai_agent_responses", "inbound_id", inbound_ids, workspace_id=workspace_id)
+            return inbounds, responses
+        inbounds = [row for row in self._fetch_inbounds_for_keys(keys) if row.get("workspace_id") == workspace_id]
         extra = list(keys)
         for row in inbounds:
             for field in ("conversation_id", "sender_key", "sender_phone", "visitor_id"):
@@ -502,9 +512,9 @@ class AiConversasBridge:
                 if value is not None and str(value).strip() and str(value).strip() not in extra:
                     extra.append(str(value).strip())
         if len(extra) > len(keys):
-            inbounds = self._fetch_inbounds_for_keys(extra)
+            inbounds = [row for row in self._fetch_inbounds_for_keys(extra) if row.get("workspace_id") == workspace_id]
         responses = self._fetch_responses_for_keys(extra, [row.get("id") for row in inbounds])
-        return inbounds, responses
+        return inbounds, [row for row in responses if row.get("workspace_id") == workspace_id]
 
     def transcript_for_conversa(self, conversa: dict) -> list[dict]:
         """Monta histórico direto das tabelas do NSAgent (fallback de exibição)."""
@@ -570,38 +580,31 @@ class AiConversasBridge:
         return str(last_text)[:500], last_at or datetime.utcnow().isoformat()
 
     def _group_threads(
-        self,
-        inbound_rows: list[dict],
-        response_rows: list[dict],
-    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
-        threads: dict[str, dict[str, list[dict[str, Any]]]] = {}
-        inbound_alias: dict[str, str] = {}
-
+        self, inbound_rows: list[dict], response_rows: list[dict],
+    ) -> dict[tuple[str, str], dict[str, list[dict[str, Any]]]]:
+        threads: dict[tuple[str, str], dict[str, list[dict[str, Any]]]] = {}
+        inbound_alias: dict[tuple[str, str], tuple[str, str]] = {}
+        inbound_keys: dict[Any, tuple[str, str]] = {}
         for row in inbound_rows:
-            key = _thread_key(row)
-            if not key:
+            identity = _thread_key(row)
+            if not identity:
                 continue
+            key = (_channel(row), identity)
+            inbound_keys[row.get("id")] = key
             threads.setdefault(key, {"inbounds": [], "responses": []})["inbounds"].append(row)
             for field in ("sender_key", "sender_phone", "visitor_id"):
                 alias = str(row.get(field) or "").strip()
                 if alias:
-                    inbound_alias[alias] = key
-
+                    inbound_alias[(_channel(row), alias)] = key
         for row in response_rows:
-            inbound_id = row.get("inbound_id")
-            key = None
-            if inbound_id is not None:
-                for inbound in inbound_rows:
-                    if inbound.get("id") == inbound_id:
-                        key = _thread_key(inbound)
-                        break
+            key = inbound_keys.get(row.get("inbound_id"))
             if not key:
                 sender = str(row.get("sender_key") or row.get("sender_phone") or "").strip()
-                key = inbound_alias.get(sender) or _thread_key(row)
-            if not key:
-                continue
-            threads.setdefault(key, {"inbounds": [], "responses": []})["responses"].append(row)
-
+                key = inbound_alias.get((_channel(row), sender))
+                if not key and _thread_key(row):
+                    key = (_channel(row), _thread_key(row))
+            if key:
+                threads.setdefault(key, {"inbounds": [], "responses": []})["responses"].append(row)
         return threads
 
     def _sync_thread_inbox(
@@ -651,7 +654,9 @@ class AiConversasBridge:
         if not conversa_id:
             return 0
 
-        inbounds, responses = self._load_thread_rows(conversa)
+        if conversa.get("workspace_id") not in (None, workspace_id):
+            return 0
+        inbounds, responses = self._load_thread_rows({**conversa, "workspace_id": workspace_id})
         written = 0
         try:
             existing_ext = self.mensagens.listar_external_ids(conversa_id)
@@ -691,7 +696,7 @@ class AiConversasBridge:
                     patch["bot_activated"] = True
                 conv_id = str(sample.get("conversation_id") or "").strip()
                 sender_key = str(sample.get("sender_key") or sample.get("sender_phone") or "").strip()
-                if conv_id:
+                if conv_id and not conversa.get("external_thread_id"):
                     patch["external_thread_id"] = conv_id
                 if sender_key:
                     patch["contact_phone"] = sender_key
@@ -707,17 +712,13 @@ class AiConversasBridge:
         if not workspace_id:
             return 0
 
-        inbound_rows = self._list_ai_pages("ai_inbound_messages", columns=INBOUND_LIST_COLUMNS)
-        response_rows = self._list_ai_pages("ai_agent_responses", columns=RESPONSE_LIST_COLUMNS)
+        inbound_rows = self._list_ai_pages("ai_inbound_messages", columns=INBOUND_LIST_COLUMNS, workspace_id=workspace_id)
+        response_rows = self._list_ai_pages("ai_agent_responses", columns=RESPONSE_LIST_COLUMNS, workspace_id=workspace_id)
         if not inbound_rows and not response_rows:
             return 0
 
         threads = self._group_threads(inbound_rows, response_rows)
         existing_rows = self.conversas.listar(workspace_id=workspace_id)
-        try:
-            existing_rows = existing_rows + self.conversas.listar_legado_sem_workspace()
-        except Exception as exc:
-            logger.warning("Falha ao listar conversas legadas no sync: %s", exc)
         index = _ConversaIndex(existing_rows)
 
         synced = 0
@@ -725,7 +726,7 @@ class AiConversasBridge:
             try:
                 inbounds = sorted(data["inbounds"], key=lambda r: r.get("created_at") or "")
                 responses = sorted(data["responses"], key=lambda r: r.get("created_at") or "")
-                if self._sync_thread_inbox(workspace_id, key, inbounds, responses, index):
+                if self._sync_thread_inbox(workspace_id, key[1], inbounds, responses, index):
                     synced += 1
             except Exception as exc:
                 logger.warning("Falha ao sincronizar thread AI %s: %s", key, exc)

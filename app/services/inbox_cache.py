@@ -64,6 +64,7 @@ SYNC_WORKSPACE_INTERVAL = 3.0
 
 def invalidate_conversa(conversa_id: str, workspace_id: str | None = None) -> None:
     mensagens_cache.delete_prefix(f"mensagens:{conversa_id}:")
+    mensagens_cache.delete_prefix(f"mensagens:{workspace_id}:{conversa_id}:")
     if workspace_id:
         conversas_cache.delete_prefix(f"conversas:{workspace_id}:")
     else:

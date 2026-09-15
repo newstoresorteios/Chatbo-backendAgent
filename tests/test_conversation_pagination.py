@@ -86,7 +86,8 @@ def test_invalidation_clears_every_cached_page():
     ) as conversations_cache:
         invalidate_conversa("conv-1", "workspace-1")
 
-    messages_cache.delete_prefix.assert_called_once_with("mensagens:conv-1:")
+    messages_cache.delete_prefix.assert_any_call("mensagens:conv-1:")
+    messages_cache.delete_prefix.assert_any_call("mensagens:workspace-1:conv-1:")
     conversations_cache.delete_prefix.assert_called_once_with("conversas:workspace-1:")
 
 

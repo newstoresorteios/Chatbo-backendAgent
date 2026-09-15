@@ -338,16 +338,12 @@ class ConversasService:
         after: str | None = None,
     ) -> list[dict]:
         safe_limit = max(1, min(limit, 200))
-        cache_key = (
-            f"mensagens:{conversa_id}:{safe_limit}:"
-            f"{before or 'latest'}:{after or 'initial'}"
-        )
         conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
-        if not conversa and workspace_id:
-            # Conversas legadas / sync sem workspace no filtro.
-            conversa = self.conversas.obter(conversa_id, workspace_id=None)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+        conversa_id = str(conversa["id"])
+        cache_key = f"mensagens:{workspace_id}:{conversa_id}:{safe_limit}:{before or 'latest'}:{after or 'initial'}"
 
         try:
             from app.services.inbox_cache import mensagens_cache
@@ -426,6 +422,7 @@ class ConversasService:
         conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
+        conversa_id = str(conversa["id"])
         if conversa.get("status") == "closed":
             raise HTTPException(status_code=400, detail="Conversa encerrada — reabra para enviar mensagens")
 

@@ -55,9 +55,9 @@ def test_group_threads_attaches_responses_via_inbound_id():
         }
     ]
     threads = bridge._group_threads(inbounds, responses)
-    assert "cv-1" in threads
-    assert len(threads["cv-1"]["inbounds"]) == 1
-    assert len(threads["cv-1"]["responses"]) == 1
+    assert ("whatsapp", "cv-1") in threads
+    assert len(threads[("whatsapp", "cv-1")]["inbounds"]) == 1
+    assert len(threads[("whatsapp", "cv-1")]["responses"]) == 1
     assert "whatsapp:5511" not in threads
 
 
@@ -82,8 +82,8 @@ def test_group_threads_merges_orphan_response_by_sender_key():
         }
     ]
     threads = bridge._group_threads(inbounds, responses)
-    assert list(threads.keys()) == ["cv-1"]
-    assert len(threads["cv-1"]["responses"]) == 1
+    assert list(threads.keys()) == [("whatsapp", "cv-1")]
+    assert len(threads[("whatsapp", "cv-1")]["responses"]) == 1
 
 
 def test_display_name_prefers_instagram_username_over_contato():

@@ -22,6 +22,7 @@ class ConversaRepository:
                 supabase
                 .table("conversas")
                 .select("*")
+                .is_("merged_into", "null")
                 .order("last_message_at", desc=True)
                 .range(offset, offset + page_size - 1)
             )
@@ -49,6 +50,8 @@ class ConversaRepository:
             query = apply_workspace_filter(query, workspace_id)
         resposta = query.execute()
         rows = resposta.data or []
+        if rows and rows[0].get("merged_into"):
+            return self.obter(str(rows[0]["merged_into"]), workspace_id=workspace_id or rows[0].get("workspace_id"))
         return rows[0] if rows else None
 
     def obter_por_thread(self, canal_id: str, external_thread_id: str) -> dict | None:
@@ -58,6 +61,7 @@ class ConversaRepository:
             .select("*")
             .eq("canal_id", canal_id)
             .eq("external_thread_id", external_thread_id)
+            .is_("merged_into", "null")
             .limit(1)
             .execute()
         )
@@ -68,21 +72,25 @@ class ConversaRepository:
         self,
         identity: str,
         workspace_id: str | None = None,
+        channel: str | None = None,
     ) -> dict | None:
         """Busca conversa por telefone / thread externa no workspace."""
         if not identity:
             return None
-        for column in ("contact_phone", "external_thread_id"):
+        for column in ("external_thread_id", "contact_phone"):
             query = (
                 supabase
                 .table("conversas")
                 .select("*")
                 .eq(column, identity)
+                .is_("merged_into", "null")
                 .order("last_message_at", desc=True)
                 .limit(1)
             )
             if workspace_id:
                 query = apply_workspace_filter(query, workspace_id)
+            if channel:
+                query = query.eq("channel", channel)
             rows = (query.execute().data) or []
             if rows:
                 return rows[0]
@@ -121,7 +129,21 @@ class ConversaRepository:
         payload = enriquecer_dados_conversa_com_cliente_id(dados)
         if workspace_id:
             payload = stamp_workspace(payload, workspace_id)
-        resposta = supabase.table("conversas").insert(payload).execute()
+        try:
+            resposta = supabase.table("conversas").insert(payload).execute()
+        except Exception as exc:
+            if "idx_conversas_workspace_session_unique" not in str(exc):
+                raise
+            query = (supabase.table("conversas").select("*")
+                .eq("workspace_id", payload["workspace_id"])
+                .eq("channel", payload["channel"])
+                .eq("external_thread_id", payload["external_thread_id"])
+                .is_("merged_into", "null"))
+            query = query.eq("canal_id", payload["canal_id"]) if payload.get("canal_id") else query.is_("canal_id", "null")
+            rows = query.limit(1).execute().data or []
+            if not rows:
+                raise
+            return rows[0]
         rows = resposta.data or []
         return rows[0] if rows else payload
 
@@ -131,9 +153,9 @@ class ConversaRepository:
         dados: dict,
         workspace_id: str | None = None,
     ) -> dict | None:
-        existente = None
-        if not dados.get("cliente_id"):
-            existente = self.obter(conversa_id, workspace_id=workspace_id)
+        existente = self.obter(conversa_id, workspace_id=workspace_id)
+        if existente:
+            conversa_id = str(existente["id"])
         payload = enriquecer_dados_conversa_com_cliente_id(dados, existente=existente)
         query = (
             supabase
@@ -167,7 +189,7 @@ class ConversaRepository:
         return rows[0] if rows else None
 
     def contar(self, workspace_id: str | None = None) -> int:
-        query = supabase.table("conversas").select("*", count="exact")
+        query = supabase.table("conversas").select("*", count="exact").is_("merged_into", "null")
         if workspace_id:
             query = apply_workspace_filter(query, workspace_id)
         resposta = query.execute()
