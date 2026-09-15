@@ -59,6 +59,27 @@ def test_message_list_can_fetch_only_updates_after_cursor():
     query.gt.assert_called_once_with("created_at", "2026-09-14T12:00:00Z")
 
 
+def test_message_list_can_fetch_older_page_before_cursor():
+    query = _query_with_rows(
+        [
+            {"id": "older-2", "created_at": "2026-09-14T10:00:00Z"},
+            {"id": "older-1", "created_at": "2026-09-14T09:00:00Z"},
+        ]
+    )
+    with patch("app.repositories.mensagem_repository.supabase") as mock_supabase:
+        mock_supabase.table.return_value = query
+        rows = MensagemRepository().listar_por_conversa(
+            "conv-1",
+            limit=60,
+            before="2026-09-14T11:00:00Z",
+        )
+
+    assert [row["id"] for row in rows] == ["older-1", "older-2"]
+    query.lt.assert_called_once_with("created_at", "2026-09-14T11:00:00Z")
+    query.order.assert_called_once_with("created_at", desc=True)
+    query.limit.assert_called_once_with(60)
+
+
 def test_invalidation_clears_every_cached_page():
     with patch("app.services.inbox_cache.mensagens_cache") as messages_cache, patch(
         "app.services.inbox_cache.conversas_cache"

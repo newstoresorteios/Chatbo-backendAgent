@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+from urllib.parse import urlparse
 
 import requests
 
@@ -75,6 +76,58 @@ class WhatsAppMetaProvider:
         )
         response.raise_for_status()
         return response.json()
+
+    def upload_media(self, filename: str, content: bytes, content_type: str) -> str:
+        response = requests.post(
+            f"{self._base_url()}/media",
+            headers={"Authorization": f"Bearer {self.access_token}"},
+            data={"messaging_product": "whatsapp"},
+            files={"file": (filename, content, content_type)},
+            timeout=60,
+        )
+        response.raise_for_status()
+        return str(response.json()["id"])
+
+    def enviar_media(self, to_phone: str, kind: str, media_id: str,
+                     filename: str, caption: str = "") -> dict:
+        media = {"id": media_id}
+        if kind == "document":
+            media["filename"] = filename
+        if caption and kind in {"image", "document"}:
+            media["caption"] = caption[:1024]
+        response = requests.post(
+            f"{self._base_url()}/messages",
+            headers={"Authorization": f"Bearer {self.access_token}"},
+            json={"messaging_product": "whatsapp", "to": "".join(ch for ch in to_phone if ch.isdigit()),
+                  "type": kind, kind: media},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def download_media(self, media_id: str) -> tuple[bytes, str]:
+        response = requests.get(
+            f"https://graph.facebook.com/{self.api_version}/{media_id}",
+            headers={"Authorization": f"Bearer {self.access_token}"}, timeout=30,
+        )
+        response.raise_for_status()
+        info = response.json()
+        url = str(info["url"])
+        host = (urlparse(url).hostname or "").lower()
+        if urlparse(url).scheme != "https" or not (
+            host in {"facebook.com", "fbcdn.net", "fbsbx.com"}
+            or host.endswith((".fbcdn.net", ".facebook.com", ".fbsbx.com"))
+        ):
+            raise ValueError("Host de mídia Meta não permitido")
+        with requests.get(url, headers={"Authorization": f"Bearer {self.access_token}"},
+                          timeout=60, stream=True) as file_response:
+            file_response.raise_for_status()
+            content = bytearray()
+            for chunk in file_response.iter_content(65536):
+                content.extend(chunk)
+                if len(content) > 16 * 1024 * 1024:
+                    raise ValueError("Mídia recebida excede 16 MB")
+        return bytes(content), str(info.get("mime_type") or "")
 
     def testar_conexao(self) -> dict:
         if not self.configurado():

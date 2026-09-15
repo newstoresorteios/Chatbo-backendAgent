@@ -44,6 +44,14 @@ def _map_mensagem(row: dict) -> dict:
     external_id = row.get("external_id")
     provider_status = str(row.get("provider_status") or "").lower()
     status = provider_status if provider_status in {"sent", "delivered", "read", "failed"} else row.get("status") or "sent"
+    media_url = None
+    if row.get("media_storage_path"):
+        from app.services.conversation_media import signed_media_url
+
+        try:
+            media_url = signed_media_url(row["media_storage_path"])
+        except Exception as exc:
+            logger.warning("URL privada de mídia indisponível: %s", exc)
     return {
         "id": str(row.get("id")),
         "conversationId": str(row.get("conversa_id")),
@@ -52,6 +60,11 @@ def _map_mensagem(row: dict) -> dict:
         "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
         "status": status,
         "externalId": str(external_id) if external_id else None,
+        "mediaType": row.get("media_type"),
+        "mediaFilename": row.get("media_filename"),
+        "mediaContentType": row.get("media_content_type"),
+        "mediaUrl": media_url,
+        "mediaByteSize": row.get("media_byte_size"),
     }
 
 
@@ -329,21 +342,21 @@ class ConversasService:
             f"mensagens:{conversa_id}:{safe_limit}:"
             f"{before or 'latest'}:{after or 'initial'}"
         )
-        try:
-            from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache
-
-            cached = mensagens_cache.get(cache_key)
-            if cached is not None:
-                return cached
-        except Exception:
-            pass
-
         conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
         if not conversa and workspace_id:
             # Conversas legadas / sync sem workspace no filtro.
             conversa = self.conversas.obter(conversa_id, workspace_id=None)
         if not conversa:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+        try:
+            from app.services.inbox_cache import mensagens_cache
+
+            cached = mensagens_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        except Exception:
+            pass
 
         # Sync NSAgent com throttle — evita N queries a cada poll de 2s.
         written = 0
@@ -525,6 +538,66 @@ class ConversasService:
         except Exception:
             pass
         return mapped
+
+    def enviar_midia(self, conversa_id: str, filename: str, content: bytes,
+                     content_type: str, caption: str, workspace_id: str | None,
+                     actor_user_id: str | None, actor_name: str | None) -> dict:
+        from app.services.conversation_media import safe_filename, store_media, validate_media
+        from app.services.inbox_cache import invalidate_conversa
+        from app.services.whatsapp_service import whatsapp_service
+
+        kind = validate_media(content, content_type)
+        if kind == "audio" and caption.strip():
+            raise HTTPException(400, "Áudio do WhatsApp não suporta legenda; envie o texto separadamente")
+        if not workspace_id:
+            raise HTTPException(400, "Workspace obrigatório para anexos")
+        conversa = self._obter_conversa(conversa_id, workspace_id)
+        if conversa.get("status") == "closed":
+            raise HTTPException(400, "Reabra a conversa para enviar arquivos")
+        if str(conversa.get("assigned_to") or "") != str(actor_user_id or ""):
+            raise HTTPException(403, "Assuma a conversa antes de enviar arquivos")
+        if conversa.get("channel") != "whatsapp" or not conversa.get("canal_id"):
+            raise HTTPException(400, "Anexos disponíveis somente no canal WhatsApp Meta")
+        ws = workspace_id or conversa.get("workspace_id")
+        if not ws:
+            raise HTTPException(400, "Conversa sem workspace; vincule-a antes de enviar arquivos")
+        name = safe_filename(filename)
+        text = _format_atendente_outbound(actor_name, caption.strip()) if caption.strip() else ""
+        label = text or f"[{kind}: {name}]"
+        try:
+            path = store_media(str(ws), conversa_id, name, content, content_type)
+        except Exception as exc:
+            logger.exception("Falha ao salvar mídia da conversa: %s", exc)
+            raise HTTPException(502, "Não foi possível salvar o anexo") from exc
+
+        mensagem = self.mensagens.criar({
+            "conversa_id": conversa_id, "content": label, "sender": "agent",
+            "status": "sending", "direction": "outbound", "media_type": kind,
+            "media_filename": name, "media_content_type": content_type,
+            "media_storage_path": path, "media_byte_size": len(content),
+        })
+        self.conversas.atualizar(conversa_id, {
+            "last_message": label, "last_message_at": datetime.utcnow().isoformat(),
+            "unread_count": 0, "bot_activated": False,
+        }, workspace_id=workspace_id)
+        try:
+            from app.services.human_takeover_bridge import mark_human_active
+
+            mark_human_active(conversa, source="chatbo_midia")
+        except Exception:
+            pass
+        delivery = whatsapp_service.enviar_midia_para_conversa(
+            conversa, name, content, content_type, kind, text,
+        )
+        updated = self.mensagens.atualizar(str(mensagem["id"]), {
+            "status": "sent" if delivery.get("sent") else "failed",
+            "provider_status": "sent" if delivery.get("sent") else "failed",
+            "external_id": delivery.get("externalId"),
+        })
+        invalidate_conversa(conversa_id, str(ws))
+        if not delivery.get("sent"):
+            raise HTTPException(502, delivery.get("reason") or "Falha ao enviar anexo no WhatsApp")
+        return _map_mensagem(updated or mensagem)
 
     def transferir(
         self,

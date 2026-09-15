@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.auth import obter_token_payload, obter_usuario_atual
@@ -96,6 +96,22 @@ def send_mensagem(
         workspace_id=workspace_id_from_context(context),
         actor_user_id=payload.get("sub"),
         actor_name=_actor_name(payload),
+    )
+
+
+@router.post("/conversas/{conversation_id}/midia")
+async def send_midia(
+    conversation_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(default=""),
+    payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
+):
+    content = await file.read(16 * 1024 * 1024 + 1)
+    return conversas_service.enviar_midia(
+        conversation_id, file.filename or "arquivo", content,
+        (file.content_type or "").split(";")[0].lower(), caption,
+        workspace_id_from_context(context), payload.get("sub"), _actor_name(payload),
     )
 
 

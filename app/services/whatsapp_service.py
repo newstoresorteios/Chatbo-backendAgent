@@ -41,8 +41,7 @@ class WhatsAppService:
     def _resolve_canal(self, phone_number_id: str | None = None) -> dict | None:
         if phone_number_id:
             canal = self.canais.get_canal_by_phone_number_id(phone_number_id)
-            if canal:
-                return canal
+            return canal
 
         canais = self.canais.list_canais()
         whatsapp = [c for c in canais if c.get("type") == "whatsapp"]
@@ -150,11 +149,9 @@ class WhatsAppService:
 
                 for status in value.get("statuses") or []:
                     self._processar_status(status)
-
-        if canal := self._resolve_canal():
-            self.canais.update_canal(canal["id"], {
-                "last_activity": datetime.utcnow().isoformat(),
-            })
+                self.canais.update_canal(canal["id"], {
+                    "last_activity": datetime.utcnow().isoformat(),
+                })
 
         return {"processed": processed}
 
@@ -178,6 +175,28 @@ class WhatsAppService:
 
         conversa = self.conversas.obter_por_thread(str(canal["id"]), wa_id)
         workspace_id = str(canal.get("workspace_id") or "").strip() or None
+        media_fields = {}
+        media_kind = str(message.get("type") or "")
+        if media_kind in {"image", "audio", "document"} and workspace_id:
+            from app.services.conversation_media import safe_filename, store_media, validate_media
+
+            media = message.get(media_kind) or {}
+            media_id = media.get("id")
+            if media_id:
+                try:
+                    data, actual_type = self._provider_for_canal(canal).download_media(str(media_id))
+                    declared_type = actual_type.split(";")[0].lower()
+                    validate_media(data, declared_type)
+                    suffix = declared_type.split("/")[-1].split("+")[0]
+                    filename = safe_filename(media.get("filename") or f"{media_kind}-{media_id}.{suffix}")
+                    media_fields = {
+                        "media_type": media_kind, "media_filename": filename,
+                        "media_content_type": declared_type, "media_byte_size": len(data),
+                        "media_storage_path": store_media(workspace_id, wa_id, filename,
+                                                          data, declared_type),
+                    }
+                except Exception as exc:
+                    logger.warning("Mídia inbound %s indisponível: %s", media_id, exc)
         customer_name = contacts.get(wa_id) or f"WhatsApp {wa_id[-4:]}"
 
         if not conversa:
@@ -211,6 +230,7 @@ class WhatsAppService:
             "direction": "inbound",
             "external_id": external_id,
             "provider_status": "received",
+            **media_fields,
         })
 
         from app.services.inbox_cache import invalidate_conversa
@@ -253,7 +273,31 @@ class WhatsAppService:
                 return (interactive.get("button_reply") or {}).get("title") or ""
             if interactive.get("type") == "list_reply":
                 return (interactive.get("list_reply") or {}).get("title") or ""
+        if msg_type in {"image", "audio", "document"}:
+            media = message.get(msg_type) or {}
+            return media.get("caption") or f"[{msg_type}: {media.get('filename') or 'arquivo'}]"
         return f"[{msg_type or 'mensagem'} recebida]"
+
+    def enviar_midia_para_conversa(self, conversa: dict, filename: str, content: bytes,
+                                  content_type: str, kind: str, caption: str) -> dict:
+        canal = self.canais.get_canal(str(conversa.get("canal_id") or ""))
+        if not canal or (
+            canal.get("workspace_id") and conversa.get("workspace_id")
+            and str(canal["workspace_id"]) != str(conversa["workspace_id"])
+        ):
+            return {"sent": False, "reason": "Canal WhatsApp da conversa não encontrado"}
+        provider = self._provider_for_canal(canal)
+        phone = conversa.get("contact_phone") or conversa.get("external_thread_id")
+        if not phone or not provider.configurado() or not (canal or {}).get("connected", True):
+            return {"sent": False, "reason": "WhatsApp Meta não conectado"}
+        try:
+            media_id = provider.upload_media(filename, content, content_type)
+            result = provider.enviar_media(str(phone), kind, media_id, filename, caption)
+            external_id = (result.get("messages") or [{}])[0].get("id")
+            return {"sent": True, "externalId": external_id}
+        except Exception as exc:
+            logger.exception("Falha no envio de mídia WhatsApp: %s", exc)
+            return {"sent": False, "reason": "Falha no envio de mídia pela Meta"}
 
     def enviar_para_conversa(self, conversa: dict, content: str, mensagem_id: str | None = None) -> dict:
         phone = conversa.get("contact_phone") or conversa.get("external_thread_id")
