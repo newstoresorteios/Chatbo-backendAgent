@@ -35,6 +35,28 @@ def validate_structured(value: str, schema: str) -> None:
                     or any(not isinstance(cue, str) or not cue.strip() for cue in item["cues"])
                     or item.get("policyKey") not in {None, "acceptsTradeIn"}):
                 raise ValueError("cada item deve ter title, body e cues válidos")
+    elif schema == "technicalFeatures":
+        seen = set()
+        for item in parsed:
+            if not isinstance(item, dict) or item.get("field") not in {"mechanism", "crystal"}:
+                raise ValueError("informe mechanism ou crystal como característica")
+            identity = (item["field"], item.get("value"))
+            if any(not isinstance(item.get(k), str) or not item[k].strip() or len(item[k]) > 160 for k in ("value", "label", "query")):
+                raise ValueError("preencha value, label e query com até 160 caracteres")
+            if identity in seen:
+                raise ValueError("valores técnicos duplicados")
+            seen.add(identity)
+            for key in ("aliases", "evidenceFields"):
+                entries = item.get(key)
+                if not isinstance(entries, list) or not 1 <= len(entries) <= 40 or any(not isinstance(x, str) or not x.strip() or len(x) > 160 for x in entries):
+                    raise ValueError("aliases e evidenceFields devem conter de 1 a 40 textos curtos")
+    elif schema == "featurePhrases":
+        for item in parsed:
+            if not isinstance(item, str) or not item.strip() or len(item) > 200:
+                raise ValueError("expressões devem ter até 200 caracteres")
+            parts = [(field, spec, conversion) for _, field, spec, conversion in Formatter().parse(item) if field is not None]
+            if parts != [("feature", "", None)]:
+                raise ValueError("cada expressão deve conter a variável {feature} uma vez")
     else:
         raise ValueError("formato estruturado desconhecido")
 
@@ -94,4 +116,29 @@ def validate_values(values: dict, fields: list[dict], *, current: dict | None = 
                 error = "informe uma URL HTTPS oficial, sem credenciais"
         if error:
             raise HTTPException(status_code=422, detail=f"{field['label']}: {error}")
+    errors = [item["message"] for item in configuration_diagnostics(result) if item["level"] == "error"]
+    if errors:
+        raise HTTPException(status_code=422, detail=" ".join(errors))
     return result
+
+
+def configuration_diagnostics(values: dict) -> list[dict]:
+    diagnostics = []
+    def add(code, level, message):
+        diagnostics.append({"code":code, "level":level, "message":message})
+    mode = values.get("agent_critique_mode", "off")
+    promote = bool(values.get("agent_critique_enforce_on_commerce"))
+    if mode == "shadow" and promote:
+        add("commerce_review_promoted", "info", "A revisão está em observação, mas será obrigatória nas respostas comerciais porque a promoção está ativada.")
+    if values.get("agent_llm_budget_enabled"):
+        base = values.get("agent_max_llm_calls_per_turn", 0)
+        complex_cap = values.get("agent_max_llm_calls_per_turn_complex", base)
+        review = mode == "enforce" or (mode == "shadow" and promote)
+        if review and base < 3:
+            add("review_budget_incompatible", "error", "A revisão obrigatória exige pelo menos 3 chamadas por turno para interpretação, resposta e revisão.")
+        if complex_cap < base:
+            add("complex_budget_below_base", "error", "O limite de chamadas para turnos complexos deve ser igual ou superior ao limite comum.")
+        retries = values.get("agent_critique_max_retries", 0)
+        if review and retries and complex_cap < 5:
+            add("repair_budget_limited", "info", "As novas tentativas dependem do saldo de chamadas: regenerar e revisar novamente exige duas chamadas disponíveis.")
+    return diagnostics

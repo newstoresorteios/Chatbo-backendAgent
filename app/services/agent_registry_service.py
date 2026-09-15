@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 
 from app.repositories.agent_registry_repository import AgentRegistryRepository
-from app.services.configuration_validation import validate_values
+from app.services.configuration_validation import validate_values, configuration_diagnostics
 from app.services.workspace_service import workspace_service
 
 WORKSPACE_ADMIN_ROLES = {"owner", "admin"}
@@ -65,6 +65,7 @@ class AgentRegistryService:
             "version": int((row or {}).get("config_version") or 0),
             "values": values,
             "fields": fields,
+            "diagnostics": configuration_diagnostics(values),
             "updatedAt": (row or {}).get("updated_at"),
         }
 

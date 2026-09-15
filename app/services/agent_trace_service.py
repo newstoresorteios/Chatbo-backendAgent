@@ -30,7 +30,7 @@ class AgentTraceService:
     def _parts(self, row: dict) -> tuple[dict, dict, dict]:
         provider = _dict(row.get("provider_response"))
         metadata = _dict(provider.get("_agent_metadata"))
-        runtime = _dict(metadata.get("turn_runtime"))
+        runtime = _dict(provider.get("_agent_runtime")) or _dict(metadata.get("turn_runtime"))
         return metadata, runtime, _dict(metadata.get("persona_runtime"))
 
     def _outcome(self, row: dict, runtime: dict) -> str:
@@ -147,6 +147,12 @@ class AgentTraceService:
             "outbound": _dict(runtime.get("outbound")),
             "qualityJudge": _dict(metadata.get("quality_judge")),
             "factualValidation": _dict(metadata.get("factual_validation")),
+            "responseCritique": _dict(metadata.get("response_critique")),
+            "finalResponseValidation": _dict(metadata.get("final_response_validation")),
+            "technicalRequirements": _dict(metadata.get("technical_requirements")),
+            "technicalEvidence": list(metadata.get("technical_evidence") or []),
+            "llmBudget": _dict(runtime.get("llm_budget")),
+            "avoidedCalls": list(runtime.get("llm_avoided_reasons") or []),
             "personaRuntime": persona,
         }
 

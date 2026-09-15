@@ -95,6 +95,22 @@ def test_trace_from_another_workspace_is_not_found(service):
     assert error.value.status_code == 404
 
 
+def test_trace_exposes_final_quality_and_authoritative_runtime(service):
+    provider = service.repo.rows[0]["provider_response"]
+    provider["_agent_runtime"] = {"trace_id":"actual-final", "llm_budget":{"max_calls":4,"used_calls":3},
+                                  "llm_avoided_reasons":[{"reason":"review_reserved"}]}
+    provider["_agent_metadata"].update(response_critique={"approved":None,"review_status":"unavailable"},
+        final_response_validation={"passed":True,"delivered_product_ids":[]},
+        technical_requirements={"mechanism":"automatic","crystal":"sapphire"},
+        technical_evidence=[{"product_id":"1","status":"mismatch"}])
+    detail = service.obter({}, 7)
+    assert detail["traceId"] == "actual-final"
+    assert detail["llmBudget"]["max_calls"] == 4
+    assert detail["responseCritique"]["approved"] is None
+    assert detail["technicalRequirements"]["crystal"] == "sapphire"
+    assert detail["finalResponseValidation"]["delivered_product_ids"] == []
+
+
 def test_filtered_pagination_resumes_after_last_returned_match(service):
     service.repo.rows = [trace_row(response_id=i) for i in range(10, 3, -1)]
     result = service.listar({}, limit=2, before=None, channel=None, outcome="delivered")
