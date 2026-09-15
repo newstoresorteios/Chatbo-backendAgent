@@ -14,6 +14,15 @@ CONFIG_FIELDS = [
     {"key": "catalogCandidatePool", "label": "Candidatos de busca", "description": "Quantidade de produtos avaliados antes do ranqueamento.", "type": "integer", "group": "Catálogo", "min": 5, "max": 80, "step": 5},
     {"key": "catalogRerankLimit", "label": "Candidatos para reranking", "description": "Quantidade de produtos enviados para a seleção final.", "type": "integer", "group": "Catálogo", "min": 5, "max": 20, "step": 1},
     {"key": "observabilityLevel", "label": "Nível dos logs", "description": "Detalhado amplia diagnósticos, mantendo a redação de dados sensíveis.", "type": "select", "group": "Observabilidade", "options": [{"value": "standard", "label": "Padrão"}, {"value": "detailed", "label": "Detalhado"}]},
+    {"key": "learningEnabled", "label": "Revisar atendimentos", "description": "Permite que o NSAgent transforme sinais dos atendimentos em propostas de aprendizado.", "type": "boolean", "group": "Aprendizado"},
+    {"key": "learningAutoPromote", "label": "Criar instruções automaticamente", "description": "Cria extensões pendentes a partir de insights aprovados pela constituição do agente.", "type": "boolean", "group": "Aprendizado"},
+    {"key": "learningAutoActivate", "label": "Ativação automática", "description": "Permite ativação sem gate humano. Mantenha desligado para revisão operacional.", "type": "boolean", "group": "Aprendizado"},
+    {"key": "learningLookbackHours", "label": "Janela de análise", "description": "Horas consideradas ao iniciar ou recompor o ciclo de aprendizado.", "type": "integer", "group": "Aprendizado", "min": 1, "max": 168, "step": 1},
+    {"key": "learningBatchLimit", "label": "Atendimentos por ciclo", "description": "Limite de respostas avaliadas em cada execução do aprendizado.", "type": "integer", "group": "Aprendizado", "min": 50, "max": 2000, "step": 50},
+    {"key": "learningMaxClusters", "label": "Problemas por ciclo", "description": "Máximo de grupos de falha enviados para reflexão em cada ciclo.", "type": "integer", "group": "Aprendizado", "min": 1, "max": 20, "step": 1},
+    {"key": "learningCanaryHours", "label": "Duração do canário", "description": "Tempo de observação de uma instrução ativada automaticamente.", "type": "integer", "group": "Canário e rollback", "min": 1, "max": 72, "step": 1},
+    {"key": "learningRollbackMinReviews", "label": "Amostra mínima", "description": "Quantidade mínima de revisões antes de confirmar ou reverter um canário.", "type": "integer", "group": "Canário e rollback", "min": 5, "max": 500, "step": 5},
+    {"key": "learningRollbackFailLift", "label": "Limite de piora", "description": "Multiplicador da taxa de falha que dispara rollback automático.", "type": "number", "group": "Canário e rollback", "min": 1, "max": 3, "step": 0.1},
 ]
 
 

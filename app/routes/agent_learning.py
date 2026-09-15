@@ -34,9 +34,8 @@ def _workspace_id(usuario: dict) -> str:
 
 @router.get("/agent-learning/overview")
 def learning_overview(usuario: dict = Depends(requer_permissao("managePlatform"))):
-    _ = usuario
     try:
-        return agent_learning_service.overview()
+        return agent_learning_service.overview(workspace_id=_workspace_id(usuario))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -47,9 +46,10 @@ def list_learning_insights(
     limit: int = Query(default=50, ge=1, le=200),
     usuario: dict = Depends(requer_permissao("managePlatform")),
 ):
-    _ = usuario
     try:
-        return agent_learning_service.list_insights(status=status, limit=limit)
+        return agent_learning_service.list_insights(
+            workspace_id=_workspace_id(usuario), status=status, limit=limit
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -62,9 +62,10 @@ def list_learning_extensions(
     limit: int = Query(default=50, ge=1, le=200),
     usuario: dict = Depends(requer_permissao("managePlatform")),
 ):
-    _ = usuario
     try:
-        return agent_learning_service.list_extensions(status=status, limit=limit)
+        return agent_learning_service.list_extensions(
+            workspace_id=_workspace_id(usuario), status=status, limit=limit
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -100,6 +101,7 @@ def reject_learning_insight(
     try:
         return agent_learning_service.reject_insight(
             insight_id,
+            workspace_id=_workspace_id(usuario),
             reason=body.reason if body else None,
             actor=_actor(usuario),
         )
@@ -117,6 +119,7 @@ def approve_learning_extension(
     try:
         return agent_learning_service.approve_extension(
             extension_id,
+            workspace_id=_workspace_id(usuario),
             actor=_actor(usuario),
         )
     except HTTPException:
@@ -134,6 +137,26 @@ def reject_learning_extension(
     try:
         return agent_learning_service.reject_extension(
             extension_id,
+            workspace_id=_workspace_id(usuario),
+            reason=body.reason if body else None,
+            actor=_actor(usuario),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/agent-learning/extensions/{extension_id}/retire")
+def retire_learning_extension(
+    extension_id: int,
+    body: RejectRequest | None = None,
+    usuario: dict = Depends(requer_permissao("managePlatform")),
+):
+    try:
+        return agent_learning_service.retire_extension(
+            extension_id,
+            workspace_id=_workspace_id(usuario),
             reason=body.reason if body else None,
             actor=_actor(usuario),
         )

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -94,6 +94,40 @@ def _public_extension(row: dict) -> dict:
     }
 
 
+def _public_review(row: dict) -> dict:
+    failure_codes = row.get("failure_codes") or []
+    if not isinstance(failure_codes, list):
+        failure_codes = []
+    return {
+        "id": int(row["id"]),
+        "responseId": int(row["response_id"]) if row.get("response_id") is not None else None,
+        "channel": row.get("channel"),
+        "outcome": row.get("outcome"),
+        "failureCodes": [str(code) for code in failure_codes],
+        "customerExcerpt": str(row.get("customer_text") or "")[:240],
+        "agentExcerpt": str(row.get("agent_reply") or "")[:240],
+        "createdAt": row.get("created_at"),
+    }
+
+
+def _public_case(row: dict) -> dict:
+    failure_codes = row.get("failure_codes") or []
+    if not isinstance(failure_codes, list):
+        failure_codes = []
+    return {
+        "id": int(row["id"]),
+        "caseKey": row.get("case_key"),
+        "failureCodes": [str(code) for code in failure_codes],
+        "customerExcerpt": str(row.get("customer_excerpt") or "")[:400],
+        "badReply": str(row.get("bad_reply") or "")[:400],
+        "correction": str(row.get("correction") or "")[:800],
+        "status": row.get("status"),
+        "importance": float(row.get("importance") or 0),
+        "insightId": int(row["insight_id"]) if row.get("insight_id") is not None else None,
+        "updatedAt": row.get("updated_at"),
+    }
+
+
 class AgentLearningService:
     def tenant_id(self) -> str:
         return (NSAGENT_PERSONA_TENANT_ID or "newstore").strip()
@@ -101,6 +135,7 @@ class AgentLearningService:
     def list_insights(
         self,
         *,
+        workspace_id: str,
         status: str | None = "pending_review",
         limit: int = 50,
     ) -> dict:
@@ -108,6 +143,7 @@ class AgentLearningService:
             supabase.table("ai_learning_insights")
             .select("*")
             .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
             .order("created_at", desc=True)
             .limit(min(max(limit, 1), 200))
         )
@@ -125,6 +161,7 @@ class AgentLearningService:
     def list_extensions(
         self,
         *,
+        workspace_id: str,
         status: str | None = "pending_review",
         limit: int = 50,
     ) -> dict:
@@ -132,6 +169,7 @@ class AgentLearningService:
             supabase.table("ai_agent_instruction_extensions")
             .select("*")
             .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
             .order("created_at", desc=True)
             .limit(min(max(limit, 1), 200))
         )
@@ -146,28 +184,68 @@ class AgentLearningService:
             "tenantId": self.tenant_id(),
         }
 
-    def overview(self) -> dict:
-        insights_pending = self.list_insights(status="pending_review", limit=100)
-        extensions_pending = self.list_extensions(status="pending_review", limit=100)
-        extensions_active = self.list_extensions(status="active", limit=20)
+    def list_reviews(self, *, workspace_id: str, limit: int = 30) -> list[dict]:
+        rows = (
+            supabase.table("ai_attendance_reviews")
+            .select("id,response_id,channel,outcome,failure_codes,customer_text,agent_reply,created_at")
+            .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
+            .order("created_at", desc=True)
+            .limit(min(max(limit, 1), 100))
+            .execute()
+            .data
+            or []
+        )
+        return [_public_review(row) for row in rows]
+
+    def list_cases(self, *, workspace_id: str, limit: int = 20) -> list[dict]:
+        rows = (
+            supabase.table("ai_learning_cases")
+            .select("id,case_key,failure_codes,customer_excerpt,bad_reply,correction,status,importance,insight_id,updated_at")
+            .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
+            .eq("status", "active")
+            .order("importance", desc=True)
+            .limit(min(max(limit, 1), 100))
+            .execute()
+            .data
+            or []
+        )
+        return [_public_case(row) for row in rows]
+
+    def overview(self, *, workspace_id: str) -> dict:
+        insights_pending = self.list_insights(workspace_id=workspace_id, status="pending_review", limit=100)
+        extensions_pending = self.list_extensions(workspace_id=workspace_id, status="pending_review", limit=100)
+        extensions_active = self.list_extensions(workspace_id=workspace_id, status="active", limit=50)
+        reviews = self.list_reviews(workspace_id=workspace_id, limit=30)
+        cases = self.list_cases(workspace_id=workspace_id, limit=20)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        reviews_24h = [item for item in reviews if item.get("createdAt") and datetime.fromisoformat(str(item["createdAt"]).replace("Z", "+00:00")) >= cutoff]
         return {
             "tenantId": self.tenant_id(),
+            "workspaceId": workspace_id,
             "pendingInsights": insights_pending["items"],
             "pendingExtensions": extensions_pending["items"],
             "activeExtensions": extensions_active["items"],
+            "recentReviews": reviews,
+            "activeCases": [item for item in cases if item.get("status") == "active"],
             "counts": {
                 "pendingInsights": insights_pending["total"],
                 "pendingExtensions": extensions_pending["total"],
                 "activeExtensions": extensions_active["total"],
+                "reviewsLast24h": len(reviews_24h),
+                "failuresLast24h": sum(1 for item in reviews_24h if item.get("failureCodes")),
+                "activeCases": sum(1 for item in cases if item.get("status") == "active"),
             },
         }
 
-    def _get_insight(self, insight_id: int) -> dict:
+    def _get_insight(self, insight_id: int, *, workspace_id: str) -> dict:
         rows = (
             supabase.table("ai_learning_insights")
             .select("*")
             .eq("id", insight_id)
             .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
             .limit(1)
             .execute()
             .data
@@ -177,12 +255,13 @@ class AgentLearningService:
             raise HTTPException(status_code=404, detail="Insight não encontrado")
         return rows[0]
 
-    def _get_extension(self, extension_id: int) -> dict:
+    def _get_extension(self, extension_id: int, *, workspace_id: str) -> dict:
         rows = (
             supabase.table("ai_agent_instruction_extensions")
             .select("*")
             .eq("id", extension_id)
             .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
             .limit(1)
             .execute()
             .data
@@ -214,7 +293,7 @@ class AgentLearningService:
         # Reusa extensão já vinculada se ainda pendente
         existing_id = insight.get("applied_extension_id")
         if existing_id is not None:
-            existing = self._get_extension(int(existing_id))
+            existing = self._get_extension(int(existing_id), workspace_id=workspace_id or "")
             if existing.get("status") in {"pending_review", "active"}:
                 return existing
 
@@ -272,13 +351,15 @@ class AgentLearningService:
         actor: str | None = None,
     ) -> dict:
         """Promove insight → extensão; com activate=True, aplica na persona (active)."""
-        insight = self._get_insight(insight_id)
+        if not workspace_id:
+            raise HTTPException(status_code=400, detail="Workspace obrigatorio")
+        insight = self._get_insight(insight_id, workspace_id=workspace_id)
         if insight.get("status") == "rejected":
             raise HTTPException(status_code=409, detail="Insight já rejeitado")
         if insight.get("status") == "applied" and not activate:
             extension = None
             if insight.get("applied_extension_id") is not None:
-                extension = self._get_extension(int(insight["applied_extension_id"]))
+                extension = self._get_extension(int(insight["applied_extension_id"]), workspace_id=workspace_id)
             return {
                 "insight": _public_insight(insight),
                 "extension": _public_extension(extension) if extension else None,
@@ -302,7 +383,7 @@ class AgentLearningService:
                     "updated_at": now,
                 }
             ).eq("id", insight_id).eq("tenant_id", self.tenant_id()).execute()
-            insight = self._get_insight(insight_id)
+            insight = self._get_insight(insight_id, workspace_id=workspace_id)
 
         return {
             "insight": _public_insight(insight),
@@ -357,9 +438,10 @@ class AgentLearningService:
         self,
         extension_id: int,
         *,
+        workspace_id: str,
         actor: str | None = None,
     ) -> dict:
-        extension = self._get_extension(extension_id)
+        extension = self._get_extension(extension_id, workspace_id=workspace_id)
         approved = self._approve_extension_row(extension, actor=actor or "chatbo_ui")
 
         # Marca insight vinculado como applied
@@ -392,10 +474,11 @@ class AgentLearningService:
         self,
         insight_id: int,
         *,
+        workspace_id: str,
         reason: str | None = None,
         actor: str | None = None,
     ) -> dict:
-        insight = self._get_insight(insight_id)
+        insight = self._get_insight(insight_id, workspace_id=workspace_id)
         if insight.get("status") == "applied":
             raise HTTPException(status_code=409, detail="Insight já aplicado na persona")
 
@@ -430,6 +513,7 @@ class AgentLearningService:
             try:
                 self.reject_extension(
                     int(insight["applied_extension_id"]),
+                    workspace_id=workspace_id,
                     reason=reason,
                     actor=actor,
                 )
@@ -442,10 +526,11 @@ class AgentLearningService:
         self,
         extension_id: int,
         *,
+        workspace_id: str,
         reason: str | None = None,
         actor: str | None = None,
     ) -> dict:
-        extension = self._get_extension(extension_id)
+        extension = self._get_extension(extension_id, workspace_id=workspace_id)
         if extension.get("status") == "active":
             raise HTTPException(
                 status_code=409,
@@ -468,12 +553,45 @@ class AgentLearningService:
             )
             .eq("id", extension_id)
             .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
             .execute()
             .data
             or []
         )
         if not updated:
             raise HTTPException(status_code=502, detail="Falha ao rejeitar extensão")
+        return {"extension": _public_extension(updated[0])}
+
+    def retire_extension(
+        self,
+        extension_id: int,
+        *,
+        workspace_id: str,
+        reason: str | None = None,
+        actor: str | None = None,
+    ) -> dict:
+        extension = self._get_extension(extension_id, workspace_id=workspace_id)
+        if extension.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Somente uma extensao ativa pode ser desativada")
+        now = _now_iso()
+        metadata = extension.get("metadata") if isinstance(extension.get("metadata"), dict) else {}
+        updated = (
+            supabase.table("ai_agent_instruction_extensions")
+            .update({
+                "status": "superseded",
+                "rejection_reason": (reason or "").strip() or "Desativada pelo operador",
+                "updated_at": now,
+                "metadata": {**metadata, "retired_by": actor or "chatbo_ui", "retired_at": now},
+            })
+            .eq("id", extension_id)
+            .eq("tenant_id", self.tenant_id())
+            .eq("workspace_id", workspace_id)
+            .execute()
+            .data
+            or []
+        )
+        if not updated:
+            raise HTTPException(status_code=502, detail="Falha ao desativar extensao")
         return {"extension": _public_extension(updated[0])}
 
 
