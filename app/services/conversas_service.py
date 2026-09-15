@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import threading
 
@@ -538,6 +538,71 @@ class ConversasService:
         except Exception:
             pass
         return mapped
+
+    def marcar_lida(
+        self,
+        conversa_id: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> tuple[dict, dict | None]:
+        if not workspace_id:
+            raise HTTPException(400, "Workspace obrigatório para confirmar leitura")
+        conversa = self.conversas.obter(conversa_id, workspace_id=workspace_id)
+        if not conversa:
+            raise HTTPException(404, "Conversa não encontrada")
+        if str(conversa.get("assigned_to") or "") != str(user_id):
+            raise HTTPException(403, "Assuma a conversa antes de confirmar leitura")
+        unread = int(conversa.get("unread_count") or 0)
+        if unread <= 0:
+            return _map_conversa(conversa), None
+
+        entrada_meta = None
+        if conversa.get("channel") == "whatsapp" and conversa.get("canal_id"):
+            try:
+                entrada_meta = self.mensagens.ultima_entrada_meta(conversa_id)
+            except Exception as exc:
+                logger.warning("Consulta de leitura Meta falhou para %s: %s", conversa_id, exc)
+
+        updated = self.conversas.marcar_lida(
+            conversa_id, str(user_id), unread, workspace_id,
+        )
+        if not updated:
+            # O webhook pode ter incrementado a contagem entre o GET e o PATCH.
+            current = self.conversas.obter(conversa_id, workspace_id=workspace_id)
+            return _map_conversa(current or conversa), None
+        try:
+            from app.services.inbox_cache import invalidate_conversa
+
+            invalidate_conversa(conversa_id, workspace_id)
+        except Exception:
+            pass
+        ack = None
+        if entrada_meta and entrada_meta.get("external_id"):
+            try:
+                created = datetime.fromisoformat(str(entrada_meta["created_at"]).replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - created
+                if timedelta(0) <= age < timedelta(days=30):
+                    ack = {"conversa": updated, "message_id": str(entrada_meta["external_id"])}
+            except (KeyError, ValueError, TypeError):
+                pass
+        return _map_conversa(updated), ack
+
+    @staticmethod
+    def confirmar_leitura_meta(conversa: dict, message_id: str) -> None:
+        from app.services.whatsapp_service import whatsapp_service
+
+        try:
+            canal = whatsapp_service.canais.get_canal(str(conversa.get("canal_id") or ""))
+            if not canal or str(canal.get("workspace_id") or "") != str(
+                conversa.get("workspace_id") or ""
+            ):
+                logger.warning("Canal Meta incompatível na confirmação de leitura: %s", conversa.get("id"))
+                return
+            whatsapp_service._provider_for_canal(canal).marcar_lida(message_id)
+        except Exception as exc:
+            logger.warning("Confirmação de leitura Meta falhou para %s: %s", conversa.get("id"), exc)
 
     def enviar_midia(self, conversa_id: str, filename: str, content: bytes,
                      content_type: str, caption: str, workspace_id: str | None,

@@ -147,6 +147,25 @@ class ConversaRepository:
         rows = resposta.data or []
         return rows[0] if rows else None
 
+    def marcar_lida(
+        self,
+        conversa_id: str,
+        user_id: str,
+        unread_count: int,
+        workspace_id: str,
+    ) -> dict | None:
+        """Zera apenas a contagem observada; uma mensagem nova impede o update."""
+        query = (
+            supabase.table("conversas")
+            .update({"unread_count": 0, "updated_at": datetime.utcnow().isoformat()})
+            .eq("id", conversa_id)
+            .eq("assigned_to", user_id)
+            .eq("unread_count", unread_count)
+        )
+        resposta = apply_workspace_filter(query, workspace_id).execute()
+        rows = resposta.data or []
+        return rows[0] if rows else None
+
     def contar(self, workspace_id: str | None = None) -> int:
         query = supabase.table("conversas").select("*", count="exact")
         if workspace_id:

@@ -3,6 +3,20 @@ from app.services.supabase_service import supabase
 
 class MensagemRepository:
 
+    def ultima_entrada_meta(self, conversa_id: str) -> dict | None:
+        rows = (
+            supabase.table("mensagens")
+            .select("external_id,created_at")
+            .eq("conversa_id", conversa_id)
+            .eq("sender", "customer")
+            .eq("direction", "inbound")
+            .like("external_id", "wamid.%")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute().data or []
+        )
+        return rows[0] if rows else None
+
     def listar_por_conversa(
         self,
         conversa_id: str,

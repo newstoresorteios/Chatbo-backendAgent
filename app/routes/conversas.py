@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.auth import obter_token_payload, obter_usuario_atual
@@ -66,6 +66,24 @@ def get_mensagens(
         before=before,
         after=after,
     )
+
+
+@router.patch("/conversas/{conversation_id}/lida")
+def marcar_conversa_lida(
+    conversation_id: str,
+    background_tasks: BackgroundTasks,
+    payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
+):
+    conversa, ack = conversas_service.marcar_lida(
+        conversation_id, payload["sub"], workspace_id_from_context(context),
+    )
+    if ack:
+        background_tasks.add_task(
+            conversas_service.confirmar_leitura_meta,
+            ack["conversa"], ack["message_id"],
+        )
+    return conversa
 
 
 @router.get("/conversas/{conversation_id}/agente")

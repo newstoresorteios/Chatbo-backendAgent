@@ -77,6 +77,27 @@ class WhatsAppMetaProvider:
         response.raise_for_status()
         return response.json()
 
+    def marcar_lida(self, message_id: str) -> dict:
+        if not self.configurado():
+            raise RuntimeError("WhatsApp Meta não configurado")
+        if not message_id.startswith("wamid."):
+            raise ValueError("ID de mensagem WhatsApp inválido")
+        response = requests.put(
+            f"{self._base_url()}/messages",
+            headers={
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "status": "read",
+                "message_id": message_id,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def upload_media(self, filename: str, content: bytes, content_type: str) -> str:
         response = requests.post(
             f"{self._base_url()}/media",
