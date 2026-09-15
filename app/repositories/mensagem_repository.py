@@ -9,6 +9,7 @@ class MensagemRepository:
         *,
         limit: int | None = None,
         before: str | None = None,
+        after: str | None = None,
     ) -> list[dict]:
         query = (
             supabase
@@ -19,6 +20,8 @@ class MensagemRepository:
         )
         if before:
             query = query.lt("created_at", before)
+        if after:
+            query = query.gt("created_at", after)
         if limit is not None:
             query = query.limit(max(1, min(limit, 200)))
         rows = query.execute().data or []

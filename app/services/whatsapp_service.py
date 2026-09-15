@@ -177,6 +177,7 @@ class WhatsAppService:
             return False
 
         conversa = self.conversas.obter_por_thread(str(canal["id"]), wa_id)
+        workspace_id = str(canal.get("workspace_id") or "").strip() or None
         customer_name = contacts.get(wa_id) or f"WhatsApp {wa_id[-4:]}"
 
         if not conversa:
@@ -191,7 +192,7 @@ class WhatsAppService:
                 "last_message": content,
                 "last_message_at": datetime.utcnow().isoformat(),
                 "protocol": f"PD-{datetime.utcnow().strftime('%Y%m%d')}-{wa_id[-4:]}",
-            })
+            }, workspace_id=workspace_id)
         else:
             unread = int(conversa.get("unread_count") or 0) + 1
             self.conversas.atualizar(str(conversa["id"]), {
@@ -200,7 +201,7 @@ class WhatsAppService:
                 "last_message": content,
                 "last_message_at": datetime.utcnow().isoformat(),
                 "status": "active",
-            })
+            }, workspace_id=workspace_id)
 
         self.mensagens.criar({
             "conversa_id": str(conversa["id"]),
@@ -211,6 +212,10 @@ class WhatsAppService:
             "external_id": external_id,
             "provider_status": "received",
         })
+
+        from app.services.inbox_cache import invalidate_conversa
+
+        invalidate_conversa(str(conversa["id"]), workspace_id)
 
         try:
             from app.services.chatbot_service import chatbot_service
@@ -227,7 +232,14 @@ class WhatsAppService:
             return
         provider_status = status.get("status")
         if provider_status:
-            self.mensagens.atualizar_por_external_id(external_id, {"provider_status": provider_status})
+            updated = self.mensagens.atualizar_por_external_id(
+                external_id,
+                {"provider_status": provider_status},
+            )
+            if updated and updated.get("conversa_id"):
+                from app.services.inbox_cache import invalidate_conversa
+
+                invalidate_conversa(str(updated["conversa_id"]))
 
     def _extrair_conteudo(self, message: dict) -> str:
         msg_type = message.get("type")

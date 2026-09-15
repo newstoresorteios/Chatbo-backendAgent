@@ -56,10 +56,10 @@ conversas_cache = TtlCache()
 # Controle de sync NSAgent (não precisa a cada request).
 sync_throttle = TtlCache()
 
-MENSAGENS_TTL = 2.0
+MENSAGENS_TTL = 0.75
 CONVERSAS_TTL = 2.0
-SYNC_MSG_INTERVAL = 3.0
-SYNC_WORKSPACE_INTERVAL = 5.0
+SYNC_MSG_INTERVAL = 1.5
+SYNC_WORKSPACE_INTERVAL = 3.0
 
 
 def invalidate_conversa(conversa_id: str, workspace_id: str | None = None) -> None:

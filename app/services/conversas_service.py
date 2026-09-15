@@ -42,13 +42,15 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
 
 def _map_mensagem(row: dict) -> dict:
     external_id = row.get("external_id")
+    provider_status = str(row.get("provider_status") or "").lower()
+    status = provider_status if provider_status in {"sent", "delivered", "read", "failed"} else row.get("status") or "sent"
     return {
         "id": str(row.get("id")),
         "conversationId": str(row.get("conversa_id")),
         "content": row.get("content") or "",
         "sender": row.get("sender") or "agent",
         "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
-        "status": row.get("status") or "sent",
+        "status": status,
         "externalId": str(external_id) if external_id else None,
     }
 
@@ -320,9 +322,13 @@ class ConversasService:
         *,
         limit: int = 60,
         before: str | None = None,
+        after: str | None = None,
     ) -> list[dict]:
         safe_limit = max(1, min(limit, 200))
-        cache_key = f"mensagens:{conversa_id}:{safe_limit}:{before or 'latest'}"
+        cache_key = (
+            f"mensagens:{conversa_id}:{safe_limit}:"
+            f"{before or 'latest'}:{after or 'initial'}"
+        )
         try:
             from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache
 
@@ -361,11 +367,12 @@ class ConversasService:
             conversa_id,
             limit=safe_limit,
             before=before,
+            after=after,
         )
         mapped = [_map_mensagem(row) for row in rows]
 
         # Transcript só como fallback se a tabela mensagens ainda estiver vazia.
-        if not mapped:
+        if not mapped and not after:
             try:
                 from app.services.ai_conversas_bridge import ai_conversas_bridge
 
@@ -429,7 +436,7 @@ class ConversasService:
             "conversa_id": conversa_id,
             "content": outbound_text,
             "sender": sender,
-            "status": "sent",
+            "status": "sending" if sender in {"agent", "ai"} else "sent",
             "direction": "outbound",
         })
 
@@ -471,13 +478,15 @@ class ConversasService:
                 delivery["brevoStatus"] = brevo_outbound_service.status()
 
             if mensagem.get("id"):
-                self.mensagens.atualizar(
+                updated_message = self.mensagens.atualizar(
                     str(mensagem["id"]),
                     {
                         "status": "sent" if delivery.get("sent") else "failed",
                         "provider_status": "sent" if delivery.get("sent") else "failed",
                     },
                 )
+                if updated_message:
+                    mensagem = updated_message
 
             if sender == "agent":
                 try:

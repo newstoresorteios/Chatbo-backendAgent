@@ -56,6 +56,7 @@ def get_mensagens(
     conversation_id: str,
     limit: int = Query(default=60, ge=1, le=200),
     before: str | None = Query(default=None),
+    after: str | None = Query(default=None, max_length=80),
     context: dict = Depends(obter_company_context),
 ):
     return conversas_service.listar_mensagens(
@@ -63,6 +64,7 @@ def get_mensagens(
         workspace_id=workspace_id_from_context(context),
         limit=limit,
         before=before,
+        after=after,
     )
 
 
