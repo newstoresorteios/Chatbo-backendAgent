@@ -7,11 +7,17 @@ from app.services.supabase_service import supabase
 
 class ConversaRepository:
 
-    def listar(self, workspace_id: str | None = None, *, max_rows: int = 2000) -> list[dict]:
+    def listar(
+        self,
+        workspace_id: str | None = None,
+        *,
+        max_rows: int = 2000,
+        before: str | None = None,
+    ) -> list[dict]:
         rows: list[dict] = []
-        page_size = 500
         offset = 0
         while offset < max_rows:
+            page_size = min(500, max_rows - offset)
             query = (
                 supabase
                 .table("conversas")
@@ -21,6 +27,8 @@ class ConversaRepository:
             )
             if workspace_id:
                 query = apply_workspace_filter(query, workspace_id)
+            if before:
+                query = query.lt("last_message_at", before)
             resposta = query.execute()
             batch = resposta.data or []
             rows.extend(batch)
@@ -80,21 +88,28 @@ class ConversaRepository:
                 return rows[0]
         return None
 
-    def listar_legado_sem_workspace(self, *, max_rows: int = 2000) -> list[dict]:
+    def listar_legado_sem_workspace(
+        self,
+        *,
+        max_rows: int = 2000,
+        before: str | None = None,
+    ) -> list[dict]:
         """Conversas antigas sem workspace_id (fallback do inbox)."""
         rows: list[dict] = []
-        page_size = 500
         offset = 0
         while offset < max_rows:
-            resposta = (
+            page_size = min(500, max_rows - offset)
+            query = (
                 supabase
                 .table("conversas")
                 .select("*")
                 .is_("workspace_id", "null")
                 .order("last_message_at", desc=True)
                 .range(offset, offset + page_size - 1)
-                .execute()
             )
+            if before:
+                query = query.lt("last_message_at", before)
+            resposta = query.execute()
             batch = resposta.data or []
             rows.extend(batch)
             if len(batch) < page_size:

@@ -142,7 +142,7 @@ def _kick_workspace_sync(workspace_id: str) -> None:
                     synced,
                     workspace_id,
                 )
-                conversas_cache.delete(f"conversas:{workspace_id}")
+                conversas_cache.delete_prefix(f"conversas:{workspace_id}:")
                 conversas_cache.delete("conversas:all")
         except Exception as exc:
             logger.warning("Sync AI background falhou: %s", exc)
@@ -228,13 +228,26 @@ class ConversasService:
             workspace_id=workspace_id,
         )
 
-    def _listar_rows_inbox(self, workspace_id: str | None) -> list[dict]:
-        rows = self.conversas.listar(workspace_id=workspace_id)
+    def _listar_rows_inbox(
+        self,
+        workspace_id: str | None,
+        *,
+        limit: int = 60,
+        before: str | None = None,
+    ) -> list[dict]:
+        rows = self.conversas.listar(
+            workspace_id=workspace_id,
+            max_rows=limit,
+            before=before,
+        )
         if not workspace_id:
             return rows
         # Une legado (sem workspace_id) para não esconder threads WhatsApp/NSAgent antigas.
         try:
-            legado = self.conversas.listar_legado_sem_workspace()
+            legado = self.conversas.listar_legado_sem_workspace(
+                max_rows=limit,
+                before=before,
+            )
         except Exception as exc:
             logger.warning("Falha ao listar conversas legadas: %s", exc)
             return rows
@@ -246,10 +259,17 @@ class ConversasService:
                 merged.append(row)
                 seen.add(row_id)
         merged.sort(key=lambda r: r.get("last_message_at") or r.get("created_at") or "", reverse=True)
-        return merged
+        return merged[:limit]
 
-    def listar_conversas(self, workspace_id: str | None = None) -> list[dict]:
-        cache_key = f"conversas:{workspace_id or 'all'}"
+    def listar_conversas(
+        self,
+        workspace_id: str | None = None,
+        *,
+        limit: int = 60,
+        before: str | None = None,
+    ) -> list[dict]:
+        safe_limit = max(1, min(limit, 200))
+        cache_key = f"conversas:{workspace_id or 'all'}:{safe_limit}:{before or 'latest'}"
         cached = None
         try:
             from app.services.inbox_cache import conversas_cache
@@ -271,7 +291,11 @@ class ConversasService:
             return cached
 
         try:
-            rows = self._listar_rows_inbox(workspace_id)
+            rows = self._listar_rows_inbox(
+                workspace_id,
+                limit=safe_limit,
+                before=before,
+            )
         except Exception as exc:
             if "conversas" in str(exc).lower():
                 raise HTTPException(
@@ -289,8 +313,16 @@ class ConversasService:
             pass
         return mapped
 
-    def listar_mensagens(self, conversa_id: str, workspace_id: str | None = None) -> list[dict]:
-        cache_key = f"mensagens:{conversa_id}"
+    def listar_mensagens(
+        self,
+        conversa_id: str,
+        workspace_id: str | None = None,
+        *,
+        limit: int = 60,
+        before: str | None = None,
+    ) -> list[dict]:
+        safe_limit = max(1, min(limit, 200))
+        cache_key = f"mensagens:{conversa_id}:{safe_limit}:{before or 'latest'}"
         try:
             from app.services.inbox_cache import MENSAGENS_TTL, mensagens_cache
 
@@ -325,7 +357,11 @@ class ConversasService:
         except Exception as exc:
             logger.warning("Sync mensagens AI falhou para %s: %s", conversa_id, exc)
 
-        rows = self.mensagens.listar_por_conversa(conversa_id)
+        rows = self.mensagens.listar_por_conversa(
+            conversa_id,
+            limit=safe_limit,
+            before=before,
+        )
         mapped = [_map_mensagem(row) for row in rows]
 
         # Transcript só como fallback se a tabela mensagens ainda estiver vazia.
@@ -335,7 +371,7 @@ class ConversasService:
 
                 transcript = ai_conversas_bridge.transcript_for_conversa(conversa)
                 if transcript:
-                    mapped = _merge_mensagens([], transcript)
+                    mapped = _merge_mensagens([], transcript)[-safe_limit:]
             except Exception as exc:
                 logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
 

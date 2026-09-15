@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.core.auth import obter_token_payload, obter_usuario_atual
@@ -39,20 +39,30 @@ def _actor_name(payload: dict) -> str:
 
 
 @router.get("/conversas")
-def get_conversas(context: dict = Depends(obter_company_context)):
+def get_conversas(
+    limit: int = Query(default=60, ge=1, le=200),
+    before: str | None = Query(default=None),
+    context: dict = Depends(obter_company_context),
+):
     return conversas_service.listar_conversas(
         workspace_id=workspace_id_from_context(context),
+        limit=limit,
+        before=before,
     )
 
 
 @router.get("/conversas/{conversation_id}/mensagens")
 def get_mensagens(
     conversation_id: str,
+    limit: int = Query(default=60, ge=1, le=200),
+    before: str | None = Query(default=None),
     context: dict = Depends(obter_company_context),
 ):
     return conversas_service.listar_mensagens(
         conversation_id,
         workspace_id=workspace_id_from_context(context),
+        limit=limit,
+        before=before,
     )
 
 

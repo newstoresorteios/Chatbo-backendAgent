@@ -3,16 +3,26 @@ from app.services.supabase_service import supabase
 
 class MensagemRepository:
 
-    def listar_por_conversa(self, conversa_id: str) -> list[dict]:
-        resposta = (
+    def listar_por_conversa(
+        self,
+        conversa_id: str,
+        *,
+        limit: int | None = None,
+        before: str | None = None,
+    ) -> list[dict]:
+        query = (
             supabase
             .table("mensagens")
             .select("*")
             .eq("conversa_id", conversa_id)
-            .order("created_at", desc=False)
-            .execute()
+            .order("created_at", desc=limit is not None)
         )
-        return resposta.data or []
+        if before:
+            query = query.lt("created_at", before)
+        if limit is not None:
+            query = query.limit(max(1, min(limit, 200)))
+        rows = query.execute().data or []
+        return list(reversed(rows)) if limit is not None else rows
 
     def listar_external_ids(self, conversa_id: str) -> set[str]:
         resposta = (
