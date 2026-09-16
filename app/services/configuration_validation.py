@@ -5,6 +5,7 @@ from math import isfinite
 from string import Formatter
 from typing import Any
 import json
+import re
 from urllib.parse import urlparse
 from fastapi import HTTPException
 
@@ -46,6 +47,10 @@ def validate_structured(value: str, schema: str) -> None:
             if identity in seen:
                 raise ValueError("valores técnicos duplicados")
             seen.add(identity)
+            compatible = item.get('compatibleValues', [])
+            if (not isinstance(compatible, list) or len(compatible) > 20
+                    or any(not isinstance(x, str) or not x.strip() or len(x) > 160 for x in compatible)):
+                raise ValueError('compatibleValues deve conter valores técnicos curtos')
             for key in ("aliases", "evidenceFields"):
                 entries = item.get(key)
                 if not isinstance(entries, list) or not 1 <= len(entries) <= 40 or any(not isinstance(x, str) or not x.strip() or len(x) > 160 for x in entries):
@@ -110,6 +115,19 @@ def validate_values(values: dict, fields: list[dict], *, current: dict | None = 
                 validate_structured(value, field["valueSchema"])
             except (ValueError, TypeError) as exc:
                 error = str(exc)
+        if not error and key == 'productQuestionRules':
+            try:
+                rules = json.loads(value)
+                for name in ('questionPatterns', 'commitPatterns', 'conditionalPatterns'):
+                    patterns = rules[name]
+                    if not isinstance(patterns, list) or not 1 <= len(patterns) <= 30:
+                        raise ValueError('informe de 1 a 30 expressões por grupo')
+                    for pattern in patterns:
+                        if not isinstance(pattern, str) or not pattern or len(pattern) > 300:
+                            raise ValueError('expressão inválida')
+                        re.compile(pattern)
+            except (ValueError, TypeError, KeyError, re.error):
+                error = 'regras de perguntas inválidas; preserve os grupos e expressões regulares válidas'
         if not error and key.startswith("business.") and key.endswith("_url"):
             parsed_url = urlparse(value)
             if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.username or parsed_url.password:

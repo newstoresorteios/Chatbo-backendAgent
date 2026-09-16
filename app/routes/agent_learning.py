@@ -32,6 +32,17 @@ def _workspace_id(usuario: dict) -> str:
     return str(context["workspaceId"])
 
 
+@router.get("/agent-learning/evaluations")
+def list_evaluations(usuario: dict = Depends(requer_permissao("managePlatform"))):
+    from app.services.conversation_evaluation_service import list_conversation_evaluations
+    try:
+        return list_conversation_evaluations(_workspace_id(usuario))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Não foi possível carregar as avaliações de conversas.") from exc
+
+
 @router.get("/agent-learning/overview")
 def learning_overview(usuario: dict = Depends(requer_permissao("managePlatform"))):
     try:
