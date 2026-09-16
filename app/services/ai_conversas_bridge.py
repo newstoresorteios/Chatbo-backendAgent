@@ -27,7 +27,8 @@ INBOUND_LIST_COLUMNS = (
     "sender_name,sender_username,channel,text,channel_metadata,workspace_id"
 )
 RESPONSE_LIST_COLUMNS = (
-    "id,created_at,sender_key,sender_phone,reply_text,channel,inbound_id,workspace_id"
+    "id,created_at,sender_key,sender_phone,reply_text,channel,inbound_id,workspace_id,"
+    "handoff_required,provider_send_ok,handoff:provider_response->_agent_metadata->handoff"
 )
 INBOX_PAGE_SIZE = 500
 INBOX_MAX_ROWS = 2500
@@ -153,6 +154,41 @@ class _ConversaIndex:
             if found:
                 return found
         return None
+
+
+def _confirmed_handoff_patch(conversa: dict, responses: list[dict]) -> dict:
+    """Import delivered, consented handoffs even before the inbox session existed."""
+    if conversa.get("assigned_to") or conversa.get("status") == "closed":
+        return {}
+    previous = str(conversa.get("handoff_requested_at") or "")
+    candidates = []
+    for row in responses:
+        if row.get("workspace_id") != conversa.get("workspace_id") or _channel(row) != _channel(conversa):
+            continue
+        metadata = row.get("response_metadata") if isinstance(row.get("response_metadata"), dict) else {}
+        provider = row.get("provider_response") if isinstance(row.get("provider_response"), dict) else {}
+        stored = provider.get("_agent_metadata") if isinstance(provider.get("_agent_metadata"), dict) else {}
+        handoff = row.get("handoff") or metadata.get("handoff") or stored.get("handoff") or {}
+        if not isinstance(handoff, dict):
+            continue
+        if (row.get("provider_send_ok") is True and row.get("handoff_required") is True
+                and handoff.get("confirmed") is True and handoff.get("required") is True
+                and handoff.get("consent_reason") in {"customer_requested_human", "customer_accepted_handoff_offer"}):
+            candidates.append({**row, "consent_reason": handoff["consent_reason"]})
+    if not candidates:
+        return {}
+    latest = max(candidates, key=lambda row: row.get("created_at") or "")
+    timestamp = latest.get("created_at")
+    if not timestamp:
+        return {}
+    if previous:
+        try:
+            if datetime.fromisoformat(timestamp.replace("Z", "+00:00")) <= datetime.fromisoformat(previous.replace("Z", "+00:00")):
+                return {}
+        except (ValueError, TypeError):
+            return {}
+    return {"status": "waiting", "bot_activated": False, "handoff_requested_at": timestamp,
+            "handoff_reason": latest["consent_reason"]}
 
 
 class AiConversasBridge:
@@ -649,6 +685,7 @@ class AiConversasBridge:
             patch["contact_phone"] = sender_key
         if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
             patch["bot_activated"] = True
+        patch.update(_confirmed_handoff_patch(conversa, responses))
         updated = self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
         index.add(updated or {**conversa, **patch})
         return True
@@ -708,6 +745,7 @@ class AiConversasBridge:
                     patch["external_thread_id"] = conv_id
                 if sender_key:
                     patch["contact_phone"] = sender_key
+                patch.update(_confirmed_handoff_patch(conversa, responses))
                 self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
         except Exception as exc:
             logger.warning("Falha ao sincronizar mensagens da conversa %s: %s", conversa_id, exc)

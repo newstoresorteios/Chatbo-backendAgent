@@ -23,3 +23,16 @@ A migração cria somente uma view de leitura. Não move, apaga nem funde regist
 `python -m pytest tests/test_contact_inbox.py tests/test_conversation_session_integrity.py tests/test_ai_conversas_bridge.py tests/test_conversation_pagination.py tests/test_conversation_read.py -q`
 
 `node scripts/test-contact-inbox.mjs <URL-do-modulo-pglite>` executa a migração em Postgres isolado (PGlite 0.5.8), conferindo agrupamento, histórico, propriedade, ações e permissões. Não acessa produção.
+
+
+## Fila de atendimento humano
+
+A fila e o alerta vermelho exigem `status=waiting`, ausência de responsável e um pedido humano confirmado (`handoff_requested_at` e `handoff_reason`). Mensagens novas, mensagens não lidas e ofertas de transferência ainda sem aceite não entram na fila.
+
+- Pedido explícito do cliente: encaminha diretamente.
+- Limitação da IA, falha técnica ou regra que precisa de apoio humano: envia a mensagem configurável `message.handoff_offer` e aguarda confirmação.
+- Aceite: somente após a última resposta entregue oferecer atendimento humano na mesma empresa, canal e sessão. Recusas, aceites de links/produtos e ofertas de outra sessão não autorizam a transferência.
+- A transferência só é marcada após a resposta ser entregue; a sincronização recupera o sinal se a sessão da Central ainda não existia.
+- Assumir retira da fila. Encerrar/reabrir não repete um encaminhamento antigo já processado.
+
+Aplicar `20260916035808_confirmed_human_handoff.sql` antes de publicar backend, NSAgent e frontend. A migração mantém o histórico, preserva as permissões da view e só reconhece esperas legadas quando a auditoria registra pedido ou aceite do cliente.

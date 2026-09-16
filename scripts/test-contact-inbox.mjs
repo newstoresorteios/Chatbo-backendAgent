@@ -11,9 +11,16 @@ await db.exec(`
     assigned_to text, status text, unread_count integer, bot_activated boolean,
     customer_name text, merged_into uuid
   );
+  CREATE TABLE conversation_reconciliation_audit (
+    id bigint GENERATED ALWAYS AS IDENTITY,workspace_id uuid,entity_type text,
+    entity_id uuid,original_row jsonb,created_at timestamptz DEFAULT now()
+  );
+  CREATE TABLE agent_configuration_catalog(key text PRIMARY KEY,definition jsonb);
   ALTER TABLE conversas ENABLE ROW LEVEL SECURITY;
 `);
 await db.exec(await readFile(new URL('../supabase/migrations/20260915180040_contact_conversation_inbox.sql', import.meta.url), 'utf8'));
+const consentMigration = await readFile(new URL('../supabase/migrations/20260916035808_confirmed_human_handoff.sql', import.meta.url), 'utf8');
+await db.exec(consentMigration);
 const id = (n) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`;
 const ws = id(900);
 async function insert(n, values = {}) {
@@ -23,7 +30,7 @@ async function insert(n, values = {}) {
   await db.query(`INSERT INTO conversas (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map((_, i) => '$' + (i + 1)).join(',')})`, Object.values(row));
 }
 await insert(1, { status: 'closed' });
-await insert(2, { status: 'waiting', contact_phone: '+55 (85) 9994-8149' });
+await insert(2, { status: 'waiting', handoff_requested_at: '2026-09-15T12:02:00Z', handoff_reason: 'customer_requested_human', contact_phone: '+55 (85) 9994-8149' });
 await insert(3);
 await insert(4, { workspace_id: id(901) });
 await insert(5, { channel: 'instagram' });
@@ -63,5 +70,19 @@ const permission = await db.query("SELECT has_table_privilege('anon','conversati
 assert.equal(permission.rows[0].anon, false);
 assert.equal(permission.rows[0].authenticated, false);
 assert.ok(permission.rows[0].reloptions.includes('security_invoker=true'));
+await insert(100, {contact_phone:'5511111111111',status:'waiting'});
+let ordinary = (await db.query('SELECT current_session FROM conversation_contact_inbox WHERE id=$1',[id(100)])).rows[0];
+assert.equal(ordinary.current_session.status,'active','waiting status alone does not signal a human transfer');
+await db.query("INSERT INTO conversation_reconciliation_audit(workspace_id,entity_type,entity_id,original_row) VALUES ($1,'conversation',$2,$3)", [ws,id(100),JSON.stringify({_handoff:{reason:'integration_failure'}})]);
+await db.exec(consentMigration);
+assert.equal((await db.query('SELECT handoff_requested_at FROM conversas WHERE id=$1',[id(100)])).rows[0].handoff_requested_at,null,'automatic failures are not backfilled as customer consent');
+await db.query("INSERT INTO conversation_reconciliation_audit(workspace_id,entity_type,entity_id,original_row) VALUES ($1,'conversation',$2,$3)", [ws,id(100),JSON.stringify({_handoff:{reason:'customer_accepted_handoff_offer'}})]);
+await db.exec(consentMigration);
+ordinary = (await db.query('SELECT current_session FROM conversation_contact_inbox WHERE id=$1',[id(100)])).rows[0];
+assert.equal(ordinary.current_session.status,'waiting');
+assert.equal(ordinary.current_session.handoff_reason,'customer_accepted_handoff_offer');
+assert.ok(ordinary.current_session.handoff_requested_at);
+await db.query("UPDATE conversas SET status='active',assigned_to='operator' WHERE id=$1",[id(100)]);
+assert.equal((await db.query('SELECT current_session FROM conversation_contact_inbox WHERE id=$1',[id(100)])).rows[0].current_session.status,'active');
 await db.close();
 console.log('PASS: contact identity, scope, history preservation, grouping before pagination, claim/close and view permissions.');

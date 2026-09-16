@@ -21,6 +21,12 @@ PERFIL_DEPARTAMENTO = {
 def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
     assigned_id = row.get("assigned_to")
     assigned_user = (users or {}).get(str(assigned_id)) if assigned_id else None
+    handoff_requested = bool(row.get("handoff_requested_at")) and row.get("handoff_reason") in {
+        "customer_requested_human", "customer_accepted_handoff_offer",
+    }
+    status = row.get("status") or "active"
+    if status == "waiting" and not handoff_requested:
+        status = "active"
     return {
         "id": str(row.get("id")),
         "customerId": str(row.get("cliente_mercos_id") or ""),
@@ -28,7 +34,10 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
         "customerAvatar": row.get("customer_avatar"),
         "lastMessage": row.get("last_message") or "",
         "lastMessageAt": row.get("last_message_at") or row.get("created_at") or datetime.utcnow().isoformat(),
-        "status": row.get("status") or "active",
+        "status": status,
+        "handoffRequested": handoff_requested,
+        "handoffRequestedAt": row.get("handoff_requested_at"),
+        "handoffReason": row.get("handoff_reason"),
         "unreadCount": int(row.get("unread_count") or 0),
         "channel": row.get("channel") or "whatsapp",
         "department": row.get("department"),

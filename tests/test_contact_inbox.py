@@ -157,3 +157,35 @@ def test_contact_routes_use_current_session_for_outbound_and_keep_legacy_default
         assert client.patch('/conversas/old/assumir?scope=contact').status_code == 200
         assert contacts.atuar.call_args.args == ('old', 'ws', 'assumir')
         assert client.get('/conversas/old/mensagens?scope=contact&beforeId=invalid').status_code == 422
+
+
+def test_queue_requires_confirmed_handoff_independently_of_waiting_status():
+    from app.services.conversas_service import _map_conversa
+    generic = {"id": "session", "status": "waiting"}
+    assert _map_conversa(generic)["status"] == "active"
+    assert _map_conversa(generic)["handoffRequested"] is False
+    for reason in ("customer_requested_human", "customer_accepted_handoff_offer"):
+        confirmed = {**generic, "handoff_requested_at": "2026-09-16T12:00:00Z", "handoff_reason": reason}
+        assert _map_conversa(confirmed)["handoffRequested"] is True
+        assert _map_conversa(confirmed)["status"] == "waiting"
+    assert _map_conversa({**confirmed, "handoff_reason": "integration_failure"})["status"] == "active"
+
+
+def test_confirmed_handoff_import_preserves_claims_closures_and_does_not_repeat():
+    from app.services.ai_conversas_bridge import _confirmed_handoff_patch
+    session = {"workspace_id":"w", "channel":"whatsapp", "status":"active"}
+    response = {"workspace_id":"w", "channel":"whatsapp", "created_at":"2026-09-16T12:00:00Z",
+        "provider_send_ok": True, "handoff_required": True,
+        "response_metadata":{"handoff":{"required":True,"confirmed":True,"consent_reason":"customer_requested_human"}}}
+    projected = {**response, "handoff": response["response_metadata"]["handoff"]}
+    del projected["response_metadata"]
+    persisted = {**response, "provider_response": {"_agent_metadata": response["response_metadata"]}}
+    del persisted["response_metadata"]
+    assert _confirmed_handoff_patch(session,[projected]) == _confirmed_handoff_patch(session,[persisted])
+    patch = _confirmed_handoff_patch(session,[response])
+    assert patch["status"] == "waiting" and patch["bot_activated"] is False
+    assert _confirmed_handoff_patch({**session,"assigned_to":"operator"},[response]) == {}
+    assert _confirmed_handoff_patch({**session,"status":"closed"},[response]) == {}
+    assert _confirmed_handoff_patch({**session,"handoff_requested_at":patch["handoff_requested_at"]},[response]) == {}
+    for changed in ({"provider_send_ok":False}, {"handoff_required":False}, {"response_metadata":{}}, {"workspace_id":"other"}):
+        assert _confirmed_handoff_patch(session,[{**response,**changed}]) == {}
