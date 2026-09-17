@@ -158,6 +158,10 @@ class TrayAdaptorClient:
                 return payload[key]
         return payload
 
+    def order_complete(self, order_id: str) -> dict:
+        payload = self._get(f"internal/orders/{order_id}/complete")
+        return payload if isinstance(payload, dict) else {}
+
     def _hydrate_order_customers(self, orders: list[dict], *, max_customers: int = 86) -> list[dict]:
         """Anexa contato ao pedido para atribuição ChatBô sem expor a fonte no painel."""
         customer_ids: list[str] = []

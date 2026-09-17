@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from html import unescape
 from datetime import datetime, timezone
 from typing import Any
 
@@ -100,6 +101,12 @@ def _order_contact(order: dict) -> dict[str, str]:
         or ""
     ).strip()
     return {"email": email, "phone": phone, "name": name}
+
+
+def _clean_product_name(value: Any) -> str:
+    name = unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
+    name = re.sub(r"\s*\(\s*Disponibilidade\s*:.*?\)\s*$", "", name, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", name).strip()
 
 
 class CommercialBiService:
@@ -205,6 +212,37 @@ class CommercialBiService:
                 }
             )
         return attributed
+
+    def _enrich_order_items(self, client: Any, orders: list[dict]) -> list[dict]:
+        enriched: list[dict] = []
+        for order in orders:
+            products: list[dict] = []
+            try:
+                detail = client.order_complete(str(order.get("id") or ""))
+                raw_products = detail.get("products") if isinstance(detail, dict) else []
+                if isinstance(raw_products, list):
+                    for product in raw_products:
+                        if not isinstance(product, dict):
+                            continue
+                        quantity = max(1, int(_safe_float(product.get("quantity"), 1)))
+                        products.append(
+                            {
+                                "productId": str(product.get("product_id") or ""),
+                                "name": _clean_product_name(product.get("name")) or "Produto não informado",
+                                "quantity": quantity,
+                                "price": _safe_float(product.get("price")),
+                            }
+                        )
+            except Exception as exc:
+                logger.warning("Detalhes do pedido %s indisponíveis: %s", order.get("id"), exc)
+            enriched.append(
+                {
+                    **order,
+                    "items": products,
+                    "itemsCount": sum(item["quantity"] for item in products) or 1,
+                }
+            )
+        return enriched
 
     def _build_kpis(
         self,
@@ -432,6 +470,7 @@ class CommercialBiService:
             )
             attributed = self._attribute_orders(sample["orders"], phones, emails)
             chatbo_orders = [order for order in attributed if order["source"] == "chatbo"]
+            chatbo_orders = self._enrich_order_items(client, chatbo_orders)
             kpis = self._build_kpis(
                 chatbo_orders,
                 active_conversations=active,

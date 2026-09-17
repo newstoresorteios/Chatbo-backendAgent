@@ -54,3 +54,32 @@ def test_entities_only_include_customers_from_attributed_chatbo_orders():
     assert entities["customers"][0]["source"] == "chatbo"
     assert entities["products"] == []
     assert len(entities["orders"]) == 1
+
+
+def test_enrich_order_items_exposes_clean_product_details():
+    class FakeClient:
+        def order_complete(self, order_id):
+            assert order_id == "25894"
+            return {
+                "products": [
+                    {
+                        "product_id": 14518,
+                        "name": "Kit De Reparo Relojoeiro (Disponibilidade: Disponível em 30 dias úteis)<br />",
+                        "quantity": 1,
+                        "price": "299.99",
+                    }
+                ]
+            }
+
+    service = CommercialBiService()
+    orders = service._enrich_order_items(FakeClient(), [{"id": "25894", "total": 299.99}])
+
+    assert orders[0]["itemsCount"] == 1
+    assert orders[0]["items"] == [
+        {
+            "productId": "14518",
+            "name": "Kit De Reparo Relojoeiro",
+            "quantity": 1,
+            "price": 299.99,
+        }
+    ]
