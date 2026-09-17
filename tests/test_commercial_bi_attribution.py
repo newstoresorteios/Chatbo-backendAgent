@@ -18,6 +18,7 @@ def test_build_kpis_by_source():
         {"id": "1", "total": 100.0, "status": "processing", "source": "tray"},
         {"id": "2", "total": 40.0, "status": "delivered", "source": "chatbo"},
         {"id": "3", "total": 10.0, "status": "cancelled", "source": "tray"},
+        {"id": "4", "total": 20.0, "status": "pending", "source": "tray"},
     ]
     kpis = service._build_kpis(
         attributed,
@@ -28,5 +29,8 @@ def test_build_kpis_by_source():
     )
     assert kpis["pedidosConfirmados"] == 2
     assert kpis["receitaVendida"] == 140.0
+    assert kpis["pipelineEmAberto"] == 20.0
+    assert kpis["oportunidadesEmAberto"] == 1
+    assert kpis["pedidosEntregues"] == 1
     assert kpis["bySource"]["chatbo"] == 40.0
     assert kpis["bySource"]["tray"] == 100.0

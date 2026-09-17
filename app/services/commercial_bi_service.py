@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from app.config.settings import OPENAI_API_KEY, OPENAI_MODEL
-from app.repositories.conversa_repository import ConversaRepository
+from app.repositories.contact_inbox_repository import ContactInboxRepository
 from app.services.openai_provider import openai_configured
 from app.services.supabase_service import supabase
 from app.services.workspace_integration_service import workspace_integration_service
@@ -94,7 +94,7 @@ def _order_contact(order: dict) -> dict[str, str]:
 
 class CommercialBiService:
     def __init__(self) -> None:
-        self.conversas = ConversaRepository()
+        self.contact_inbox = ContactInboxRepository()
 
     def latest(self, workspace_id: str) -> dict | None:
         resposta = (
@@ -129,25 +129,30 @@ class CommercialBiService:
             "completedAt": row.get("completed_at"),
         }
 
-    def _chatbo_contacts(self, workspace_id: str) -> tuple[set[str], set[str], int, int]:
-        rows = self.conversas.listar(workspace_id=workspace_id) or []
+    def _chatbo_contacts(self, workspace_id: str) -> tuple[set[str], set[str], int, int, int]:
+        groups = self.contact_inbox.listar(workspace_id, limit=5000)
+        rows = [group.get("current_session") or {} for group in groups]
         phones: set[str] = set()
         emails: set[str] = set()
         active = 0
         waiting = 0
         for row in rows:
             status = row.get("status") or "active"
-            if status == "active":
-                active += 1
-            elif status == "waiting":
+            handoff_confirmed = bool(row.get("handoff_requested_at")) and row.get("handoff_reason") in {
+                "customer_requested_human",
+                "customer_accepted_handoff_offer",
+            }
+            if status == "waiting" and handoff_confirmed:
                 waiting += 1
+            elif status != "closed":
+                active += 1
             phone = _digits(row.get("contact_phone") or row.get("phone") or "")
             if len(phone) >= 8:
                 phones.add(phone[-11:] if len(phone) > 11 else phone)
             email = str(row.get("contact_email") or row.get("email") or "").strip().lower()
             if email and "@" in email:
                 emails.add(email)
-        return phones, emails, active, waiting
+        return phones, emails, active, waiting, len(rows)
 
     def _attribute_orders(
         self,
@@ -190,8 +195,9 @@ class CommercialBiService:
         products_count: int,
     ) -> dict:
         by_source = {"tray": 0.0, "chatbo": 0.0, "ecommerce": 0.0}
-        confirmed = [o for o in attributed_orders if o["status"] != "cancelled"]
+        confirmed = [o for o in attributed_orders if o["status"] in {"processing", "shipped", "delivered"}]
         delivered = [o for o in confirmed if o["status"] == "delivered"]
+        pipeline = [o for o in attributed_orders if o["status"] == "pending"]
         receita = sum(o["total"] for o in confirmed)
         retida = sum(o["total"] for o in delivered)
         for order in confirmed:
@@ -203,8 +209,20 @@ class CommercialBiService:
         return {
             "receitaVendida": round(receita, 2),
             "receitaRetida": round(retida, 2),
-            "pipelineEmAberto": 0.0,
+            "pipelineEmAberto": round(sum(o["total"] for o in pipeline), 2),
+            "oportunidadesEmAberto": len(pipeline),
             "pedidosConfirmados": len(confirmed),
+            "pedidosEntregues": len(delivered),
+            "pedidosEnviados": sum(1 for o in confirmed if o["status"] == "shipped"),
+            "receitaEnviada": round(sum(o["total"] for o in confirmed if o["status"] == "shipped"), 2),
+            "pedidosPorStatus": {
+                status: sum(1 for order in attributed_orders if order["status"] == status)
+                for status in ("pending", "processing", "shipped", "delivered", "cancelled")
+            },
+            "valoresPorStatus": {
+                status: round(sum(order["total"] for order in attributed_orders if order["status"] == status), 2)
+                for status in ("pending", "processing", "shipped", "delivered", "cancelled")
+            },
             "conversasAtivas": active_conversations,
             "waitingQueue": waiting_queue,
             "totalCustomers": customers_count,
@@ -225,12 +243,22 @@ class CommercialBiService:
     ) -> dict:
         cust_out = []
         for row in customers[:40]:
+            email = str(_pick(row, "email", "Email") or "").strip().lower()
+            phone = _digits(_pick(row, "phone", "cellphone", "mobile"))
+            related = [
+                order for order in attributed_orders
+                if (email and order.get("customerEmail") == email)
+                or (phone and str(order.get("customerPhone") or "").endswith(phone[-11:]))
+            ]
             cust_out.append(
                 {
                     "id": str(_pick(row, "id", "Id") or ""),
                     "name": str(_pick(row, "name", "Name") or "Cliente"),
-                    "email": str(_pick(row, "email", "Email") or "") or None,
-                    "phone": _digits(_pick(row, "phone", "cellphone", "mobile")) or None,
+                    "email": email or None,
+                    "phone": phone or None,
+                    "ordersCount": len(related),
+                    "totalSpent": round(sum(order["total"] for order in related if order["status"] != "cancelled"), 2),
+                    "lastContact": max((str(order.get("createdAt") or "") for order in related), default=None),
                     "source": "tray",
                 }
             )
@@ -399,7 +427,7 @@ class CommercialBiService:
                 max_pages=40,
                 product_pages=2,
             )
-            phones, emails, active, waiting = self._chatbo_contacts(workspace_id)
+            phones, emails, active, waiting, total_contacts = self._chatbo_contacts(workspace_id)
             attributed = self._attribute_orders(sample["orders"], phones, emails)
             kpis = self._build_kpis(
                 attributed,
@@ -408,6 +436,7 @@ class CommercialBiService:
                 customers_count=len(sample["customers"]),
                 products_count=len(sample["products"]),
             )
+            kpis["totalContacts"] = total_contacts
             entities = self._entities(sample["customers"], sample["products"], attributed)
             chatbo_count = sum(1 for o in attributed if o["source"] == "chatbo")
             tray_count = sum(1 for o in attributed if o["source"] == "tray")

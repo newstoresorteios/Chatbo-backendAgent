@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from app.core.workspace_scope import apply_workspace_filter
 from app.repositories.conversa_repository import ConversaRepository
+from app.repositories.contact_inbox_repository import ContactInboxRepository
 from app.repositories.dashboard_repository import DashboardRepository
 from app.repositories.mensagem_repository import MensagemRepository
 from app.services.openai_provider import openai_configured
@@ -174,6 +175,7 @@ class DashboardService:
     def __init__(self):
         self.repository = DashboardRepository()
         self.conversas = ConversaRepository()
+        self.contact_inbox = ContactInboxRepository()
         self.mensagens = MensagemRepository()
 
     def resumo(self, workspace_id: str | None = None):
@@ -185,16 +187,34 @@ class DashboardService:
 
     def _contar_conversas_por_status(self, workspace_id: str | None = None) -> dict[str, int]:
         try:
-            rows = self.conversas.listar(workspace_id=workspace_id)
+            if workspace_id:
+                rows = self.contact_inbox.listar(workspace_id, limit=5000)
+                rows = [row.get("current_session") or {} for row in rows]
+            else:
+                rows = self.conversas.listar(workspace_id=workspace_id)
         except Exception:
             return {"active": 0, "waiting": 0, "closed": 0}
 
         counts = {"active": 0, "waiting": 0, "closed": 0}
         for row in rows:
             status = row.get("status") or "active"
+            handoff_confirmed = bool(row.get("handoff_requested_at")) and row.get("handoff_reason") in {
+                "customer_requested_human",
+                "customer_accepted_handoff_offer",
+            }
+            if status == "waiting" and not handoff_confirmed:
+                status = "active"
             if status in counts:
                 counts[status] += 1
         return counts
+
+    def _carregar_contatos(self, workspace_id: str | None) -> list[dict]:
+        if not workspace_id:
+            return []
+        try:
+            return self.contact_inbox.listar(workspace_id, limit=5000)
+        except Exception:
+            return []
 
     def _carregar_linhas(
         self,
@@ -203,21 +223,32 @@ class DashboardService:
         workspace_id: str | None = None,
     ) -> list[dict]:
         try:
-            query = supabase.table(tabela).select(campo_data)
-            if workspace_id:
-                query = apply_workspace_filter(query, workspace_id)
-            resposta = query.execute()
-            return resposta.data or []
+            rows: list[dict] = []
+            page_size = 1000
+            for start in range(0, 10000, page_size):
+                query = supabase.table(tabela).select(campo_data)
+                if workspace_id:
+                    query = apply_workspace_filter(query, workspace_id)
+                batch = query.range(start, start + page_size - 1).execute().data or []
+                rows.extend(batch)
+                if len(batch) < page_size:
+                    break
+            return rows
         except Exception:
             return []
 
     def _stats_mensagens(self, workspace_id: str | None = None) -> dict:
         try:
-            query = supabase.table("mensagens").select("sender,conversa_id,created_at")
-            if workspace_id:
-                query = apply_workspace_filter(query, workspace_id)
-            resposta = query.execute()
-            rows = resposta.data or []
+            rows: list[dict] = []
+            page_size = 1000
+            for start in range(0, 20000, page_size):
+                query = supabase.table("mensagens").select("sender,conversa_id,created_at")
+                if workspace_id:
+                    query = apply_workspace_filter(query, workspace_id)
+                batch = query.range(start, start + page_size - 1).execute().data or []
+                rows.extend(batch)
+                if len(batch) < page_size:
+                    break
         except Exception:
             return {"total": 0, "ai": 0, "bot_pct": 0, "avg_response": "—", "rows": []}
 
@@ -238,7 +269,14 @@ class DashboardService:
 
         clientes_rows = self._carregar_linhas("clientes", workspace_id=workspace_id)
         pedidos_rows = self._carregar_linhas("pedidos", workspace_id=workspace_id)
-        conversas_rows = self._carregar_linhas(
+        contatos_rows = self._carregar_contatos(workspace_id)
+        conversas_rows = [
+            {
+                "last_message_at": row.get("last_message_at"),
+                "created_at": (row.get("current_session") or {}).get("created_at"),
+            }
+            for row in contatos_rows
+        ] if contatos_rows else self._carregar_linhas(
             "conversas", "last_message_at", workspace_id=workspace_id
         )
         if not conversas_rows:

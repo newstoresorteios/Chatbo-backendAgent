@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from app.repositories.conversa_repository import ConversaRepository
+from app.repositories.contact_inbox_repository import ContactInboxRepository
 from app.repositories.platform_repository import PlatformRepository
 from app.services.pulsedesk_adapter import listar_pedidos
 
@@ -41,6 +42,7 @@ class VendasService:
 
     def __init__(self):
         self.conversas = ConversaRepository()
+        self.contact_inbox = ContactInboxRepository()
         self.platform = PlatformRepository()
 
     def _load_pedidos(self, workspace_id: str | None = None) -> list[dict]:
@@ -172,7 +174,7 @@ class VendasService:
         for etapa in etapas:
             qtd = int(etapa.get("quantidade") or 0)
             etapa["conversaoPct"] = _pct(qtd, topo_qtd)
-            etapa["quedaPct"] = _pct(qtd, prev_qtd)
+            etapa["quedaPct"] = round(max(0.0, 100.0 - _pct(qtd, prev_qtd)), 1)
             prev_qtd = max(qtd, 1)
 
         return etapas
@@ -212,13 +214,78 @@ class VendasService:
                     kpis = bi["kpis"]
                     # Prefer BI when local pedidos are empty.
                     if not result.get("quantidadeVendas"):
-                        result["quantidadeVendas"] = int(kpis.get("pedidosConfirmados") or 0)
-                        result["volumeBruto"] = float(kpis.get("receitaVendida") or 0)
-                        result["valorTotalVendido"] = float(kpis.get("receitaVendida") or 0)
-                        result["valorRetido"] = float(kpis.get("receitaRetida") or 0)
-                        result["ticketMedio"] = float(kpis.get("ticketMedio") or 0)
-                        result["valorPipeline"] = float(kpis.get("pipelineEmAberto") or 0)
-                        result["pipelineValor"] = float(kpis.get("pipelineEmAberto") or 0)
+                        pedidos = ((bi.get("entities") or {}).get("orders") or [])
+                        por_status: dict[str, list[dict]] = defaultdict(list)
+                        for pedido in pedidos:
+                            por_status[str(pedido.get("status") or "pending")].append(pedido)
+
+                        vendidos = int(kpis.get("pedidosConfirmados") or 0)
+                        entregues = int(kpis.get("pedidosEntregues") or len(por_status["delivered"]))
+                        enviados = int(kpis.get("pedidosEnviados") or len(por_status["shipped"]))
+                        receita = float(kpis.get("receitaVendida") or 0)
+                        retida = float(kpis.get("receitaRetida") or 0)
+                        pipeline_valor = float(kpis.get("pipelineEmAberto") or 0)
+                        pipeline_qtd = int(kpis.get("oportunidadesEmAberto") or 0)
+                        contatos = int(kpis.get("totalContacts") or 0) or (
+                            int(kpis.get("conversasAtivas") or 0) + int(kpis.get("waitingQueue") or 0)
+                        )
+                        status_counts = kpis.get("pedidosPorStatus") or {}
+                        status_values = kpis.get("valoresPorStatus") or {}
+
+                        result.update({
+                            "quantidadeVendas": vendidos,
+                            "quantidadeConcluidas": entregues + enviados,
+                            "quantidadeEntregues": entregues,
+                            "volumeBruto": receita,
+                            "valorTotalVendido": receita,
+                            "valorConcluido": retida + _sum_total(por_status["shipped"]),
+                            "valorRetido": retida,
+                            "ticketMedio": float(kpis.get("ticketMedio") or 0),
+                            "valorPipeline": pipeline_valor,
+                            "pipelineValor": pipeline_valor,
+                            "pipelineNegocios": pipeline_qtd,
+                            "taxaConversao": _pct(entregues, contatos or vendidos),
+                            "taxaRetencao": _pct(retida, receita),
+                            "valorCancelado": float((kpis.get("valoresPorStatus") or {}).get("cancelled") or _sum_total(por_status["cancelled"])),
+                            "porStatus": [
+                                {
+                                    "status": status,
+                                    "label": label,
+                                    "quantidade": int(status_counts.get(status) or len(por_status[status])),
+                                    "valor": float(status_values.get(status) or round(_sum_total(por_status[status]), 2)),
+                                }
+                                for status, label in (
+                                    ("delivered", "Entregues"),
+                                    ("shipped", "Enviados"),
+                                    ("processing", "Processando"),
+                                    ("pending", "Pendentes"),
+                                    ("cancelled", "Cancelados"),
+                                )
+                            ],
+                            "vendasPorDia": self._vendas_por_dia(pedidos),
+                        })
+                        result["funil"] = self._montar_funil(
+                            conversas_total=contatos,
+                            funil_estagios=[],
+                            pipeline_valor=pipeline_valor,
+                            pipeline_qtd=pipeline_qtd,
+                            pedidos_total=vendidos,
+                            volume_bruto=receita,
+                            shipped=por_status["shipped"],
+                            delivered=por_status["delivered"],
+                            valor_retido=retida,
+                        )
+                        for etapa in result["funil"]:
+                            if etapa["id"] == "pedidos-enviados":
+                                etapa["quantidade"] = enviados
+                                etapa["valor"] = float(kpis.get("receitaEnviada") or etapa["valor"])
+                        topo = max(int((result["funil"] or [{}])[0].get("quantidade") or 0), 1)
+                        anterior = topo
+                        for etapa in result["funil"]:
+                            quantidade = int(etapa.get("quantidade") or 0)
+                            etapa["conversaoPct"] = _pct(quantidade, topo)
+                            etapa["quedaPct"] = round(max(0.0, 100.0 - _pct(quantidade, anterior)), 1)
+                            anterior = max(quantidade, 1)
                     result["commercialBi"] = bi
                     result["bySource"] = kpis.get("bySource") or {}
             return result
@@ -228,7 +295,9 @@ class VendasService:
 
     def _calcular_metricas(self, workspace_id: str | None = None) -> dict:
         pedidos = self._load_pedidos(workspace_id=workspace_id)
-        funil_estagios = self._load_funil()
+        # O funil legado não possui workspace_id. Em uma empresa, usamos apenas
+        # pedidos e o snapshot comercial que já são isolados por workspace.
+        funil_estagios = [] if workspace_id else self._load_funil()
 
         by_status: dict[str, list[dict]] = defaultdict(list)
         for pedido in pedidos:
@@ -241,8 +310,8 @@ class VendasService:
         cancelled = by_status["cancelled"]
 
         vendas_concluidas = delivered + shipped
-        em_processamento = pending + processing
-        pedidos_validos = [p for p in pedidos if p.get("status") != "cancelled"]
+        em_processamento = pending
+        pedidos_validos = processing + shipped + delivered
 
         volume_bruto = _sum_total(pedidos_validos)
         valor_retido = _sum_total(delivered)
@@ -257,8 +326,10 @@ class VendasService:
         ticket_medio = valor_total_vendido / quantidade_vendas if quantidade_vendas else 0
 
         try:
-            conversas = self.conversas.listar()
-            conversas_total = len(conversas)
+            if workspace_id:
+                conversas_total = len(self.contact_inbox.listar(workspace_id, limit=5000))
+            else:
+                conversas_total = len(self.conversas.listar())
         except Exception:
             conversas_total = 0
 
