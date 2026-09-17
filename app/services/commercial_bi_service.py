@@ -326,6 +326,55 @@ class CommercialBiService:
             )
         return enriched
 
+    def _attach_conversation_evidence(
+        self,
+        workspace_id: str,
+        orders: list[dict],
+    ) -> list[dict]:
+        """Attach the contact inbox entry that supports the ChatBô attribution.
+
+        The order/cart link is already validated before this method is called.  This
+        adds a reviewable path back to the grouped conversation without changing the
+        provider session identities stored in ``conversas``.
+        """
+        by_phone: dict[str, dict] = {}
+        try:
+            groups = self.contact_inbox.listar(workspace_id, limit=5000)
+            for group in groups:
+                current = group.get("current_session") or {}
+                phone = _digits(current.get("contact_phone") or current.get("phone"))
+                if not phone:
+                    continue
+                phone_key = phone[-11:] if len(phone) > 11 else phone
+                candidate = {
+                    "conversationId": str(group.get("id") or current.get("id") or ""),
+                    "activeSessionId": str(group.get("active_session_id") or current.get("id") or ""),
+                    "protocol": current.get("protocol"),
+                    "channel": current.get("channel") or group.get("channel") or "whatsapp",
+                    "lastMessageAt": group.get("last_message_at") or current.get("last_message_at"),
+                    "sessionCount": len(group.get("session_ids") or []),
+                }
+                previous = by_phone.get(phone_key)
+                if not previous or str(candidate.get("lastMessageAt") or "") > str(previous.get("lastMessageAt") or ""):
+                    by_phone[phone_key] = candidate
+        except Exception as exc:
+            logger.warning("Conversa de origem dos pedidos indisponível: %s", exc)
+
+        enriched: list[dict] = []
+        for order in orders:
+            phone = _digits(order.get("customerPhone"))
+            phone_key = phone[-11:] if len(phone) > 11 else phone
+            evidence = by_phone.get(phone_key)
+            enriched.append({
+                **order,
+                "conversationEvidence": evidence,
+                "attributionLabel": (
+                    "Contato e pedido/carrinho confirmados pelo ChatBô"
+                    if evidence else "Pedido/carrinho confirmado pelo ChatBô"
+                ),
+            })
+        return enriched
+
     def _build_kpis(
         self,
         attributed_orders: list[dict],
@@ -563,6 +612,7 @@ class CommercialBiService:
             )
             chatbo_orders = [order for order in attributed if order["source"] == "chatbo"]
             chatbo_orders = self._enrich_order_items(client, chatbo_orders)
+            chatbo_orders = self._attach_conversation_evidence(workspace_id, chatbo_orders)
             kpis = self._build_kpis(
                 chatbo_orders,
                 active_conversations=active,

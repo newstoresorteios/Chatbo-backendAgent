@@ -117,3 +117,37 @@ def test_enrich_order_items_exposes_clean_product_details():
             "price": 299.99,
         }
     ]
+
+
+def test_attach_conversation_evidence_exposes_reviewable_source():
+    service = CommercialBiService()
+    service.contact_inbox = type("Inbox", (), {
+        "listar": lambda self, workspace_id, limit: [{
+            "id": "contact-group-1",
+            "active_session_id": "session-2",
+            "session_ids": ["session-1", "session-2"],
+            "last_message_at": "2026-09-16T13:00:00Z",
+            "current_session": {
+                "id": "session-2",
+                "contact_phone": "+55 (11) 99999-8888",
+                "protocol": "AI-20260916-ABC",
+                "channel": "whatsapp",
+            },
+        }],
+    })()
+
+    orders = service._attach_conversation_evidence("workspace-1", [{
+        "id": "order-1",
+        "customerPhone": "5511999998888",
+        "attributionReason": "verified_commerce_link",
+    }])
+
+    assert orders[0]["conversationEvidence"] == {
+        "conversationId": "contact-group-1",
+        "activeSessionId": "session-2",
+        "protocol": "AI-20260916-ABC",
+        "channel": "whatsapp",
+        "lastMessageAt": "2026-09-16T13:00:00Z",
+        "sessionCount": 2,
+    }
+    assert orders[0]["attributionLabel"] == "Contato e pedido/carrinho confirmados pelo ChatBô"
