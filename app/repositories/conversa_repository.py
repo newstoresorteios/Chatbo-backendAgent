@@ -152,6 +152,8 @@ class ConversaRepository:
         conversa_id: str,
         dados: dict,
         workspace_id: str | None = None,
+        *,
+        preserve_newer_preview: bool = False,
     ) -> dict | None:
         existente = self.obter(conversa_id, workspace_id=workspace_id)
         if existente:
@@ -165,8 +167,19 @@ class ConversaRepository:
         )
         if workspace_id:
             query = apply_workspace_filter(query, workspace_id)
+        preview_at = payload.get("last_message_at") if preserve_newer_preview else None
+        if preview_at:
+            # The database checks the timestamp at write time, including concurrent sends.
+            preview_at = datetime.fromisoformat(str(preview_at).replace("Z", "+00:00")).isoformat()
+            query = query.or_(f"last_message_at.is.null,last_message_at.lte.{preview_at}")
         resposta = query.execute()
         rows = resposta.data or []
+        if not rows and preview_at:
+            # Still synchronize identity/handoff metadata without rewinding the preview.
+            metadata = {k: v for k, v in dados.items() if k not in ("last_message", "last_message_at")}
+            if metadata:
+                return self.atualizar(conversa_id, metadata, workspace_id=workspace_id)
+            return self.obter(conversa_id, workspace_id=workspace_id)
         return rows[0] if rows else None
 
     def marcar_lida(

@@ -686,7 +686,9 @@ class AiConversasBridge:
         if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
             patch["bot_activated"] = True
         patch.update(_confirmed_handoff_patch(conversa, responses))
-        updated = self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
+        updated = self.conversas.atualizar(
+            conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
+        )
         index.add(updated or {**conversa, **patch})
         return True
 
@@ -746,7 +748,9 @@ class AiConversasBridge:
                 if sender_key:
                     patch["contact_phone"] = sender_key
                 patch.update(_confirmed_handoff_patch(conversa, responses))
-                self.conversas.atualizar(conversa_id, patch, workspace_id=workspace_id)
+                self.conversas.atualizar(
+                    conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
+                )
         except Exception as exc:
             logger.warning("Falha ao sincronizar mensagens da conversa %s: %s", conversa_id, exc)
             return written
