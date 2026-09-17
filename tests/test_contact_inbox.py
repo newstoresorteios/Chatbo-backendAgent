@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from app.repositories.contact_inbox_repository import ContactInboxRepository
-from app.services.contact_inbox_service import ContactInboxService, map_contact
+from app.services.contact_inbox_service import ContactInboxService, _sync_contact_messages, map_contact
 
 
 def group():
@@ -69,19 +69,29 @@ def test_closing_all_open_sessions_does_not_rewrite_or_delete_history():
     svc.repo.mensagens.assert_not_called()
 
 
-def test_messages_sync_each_exact_session_then_read_one_global_page():
+def test_messages_returns_persisted_page_and_schedules_contact_refresh():
     svc = service()
-    sessions = [{"id": "old", "external_thread_id": "provider-a", "workspace_id": "ws"},
-                {"id": "new", "external_thread_id": "provider-b", "workspace_id": "ws"}]
-    svc.repo.sessoes.return_value = sessions
     svc.repo.mensagens.return_value = [{"id": "msg-old", "conversa_id": "old", "content": "older"},
                                      {"id": "msg-new", "conversa_id": "new", "content": "newer"}]
-    with patch('app.services.ai_conversas_bridge.ai_conversas_bridge') as bridge, patch('app.services.inbox_cache.sync_throttle') as throttle, patch('app.services.contact_inbox_service.invalidate_conversa'):
+    with patch('app.services.inbox_cache.sync_throttle') as throttle, patch('app.services.contact_inbox_service._kick_contact_sync') as kick:
         throttle.should_run.return_value = True
         result = svc.mensagens('old', 'ws', limit=60, before='2026-09-15T13:00:00Z')
-    assert [call.args[0] for call in bridge.sync_messages_for_conversa.call_args_list] == sessions
+    kick.assert_called_once_with(group(), 'ws')
+    svc.repo.sessoes.assert_not_called()
     assert [m['conversationId'] for m in result] == ['old', 'new']
     assert svc.repo.mensagens.call_args.kwargs['limit'] == 60
+
+
+def test_background_refresh_syncs_each_due_provider_session():
+    sessions = [{"id": "old", "external_thread_id": "provider-a"},
+                {"id": "new", "external_thread_id": "provider-b"}]
+    with patch('app.services.contact_inbox_service.ContactInboxRepository') as repo_type, \
+            patch('app.services.ai_conversas_bridge.ai_conversas_bridge') as bridge, \
+            patch('app.services.inbox_cache.sync_throttle') as throttle:
+        repo_type.return_value.sessoes.return_value = sessions
+        throttle.should_run.return_value = True
+        _sync_contact_messages(group(), 'ws')
+    assert [call.args[0] for call in bridge.sync_messages_for_conversa.call_args_list] == sessions
 
 
 def test_repository_filters_workspace_and_groups_before_limit():

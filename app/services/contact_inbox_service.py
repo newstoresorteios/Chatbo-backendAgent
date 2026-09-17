@@ -1,6 +1,7 @@
 """One customer window, without rewriting provider/agent session identities."""
 from datetime import datetime, timezone
 import logging
+from threading import Lock, Thread
 
 from fastapi import HTTPException
 
@@ -9,6 +10,47 @@ from app.services.conversas_service import ConversasService, PERFIL_DEPARTAMENTO
 from app.services.inbox_cache import conversas_cache, invalidate_conversa
 
 logger = logging.getLogger(__name__)
+
+_contact_sync_lock = Lock()
+_syncing_contacts: set[str] = set()
+
+
+def _sync_contact_messages(group: dict, workspace_id: str) -> None:
+    """Refresh provider messages without holding the inbox HTTP response open."""
+    from app.services.ai_conversas_bridge import ai_conversas_bridge
+
+    sync_key = f"{workspace_id}:{group['id']}"
+    try:
+        from app.services.inbox_cache import sync_throttle
+
+        for session in ContactInboxRepository().sessoes(group, workspace_id):
+            interval = 5 if str(session["id"]) == str(group["active_session_id"]) else 300
+            if not sync_throttle.should_run(f"contact-sync:{workspace_id}:{session['id']}", interval):
+                continue
+            try:
+                if ai_conversas_bridge.sync_messages_for_conversa(session, workspace_id):
+                    invalidate_conversa(str(session["id"]), workspace_id)
+            except Exception:
+                logger.exception("Falha ao sincronizar sessao do historico do contato")
+    finally:
+        with _contact_sync_lock:
+            _syncing_contacts.discard(sync_key)
+
+
+def _kick_contact_sync(group: dict, workspace_id: str) -> bool:
+    """Start at most one provider refresh per contact and return immediately."""
+    sync_key = f"{workspace_id}:{group['id']}"
+    with _contact_sync_lock:
+        if sync_key in _syncing_contacts:
+            return False
+        _syncing_contacts.add(sync_key)
+    Thread(
+        target=_sync_contact_messages,
+        args=(group, workspace_id),
+        daemon=True,
+        name=f"contact-sync-{group['id']}",
+    ).start()
+    return True
 
 
 def map_contact(group: dict, users: dict | None = None) -> dict:
@@ -62,20 +104,16 @@ class ContactInboxService:
             except ValueError as exc:
                 raise HTTPException(422, "Informe a data da mensagem anterior junto ao identificador") from exc
         group = self.obter(conversation_id, workspace_id)
-        from app.services.ai_conversas_bridge import ai_conversas_bridge
         from app.services.inbox_cache import sync_throttle
-        # Each original session is synchronized through its exact provider identity.
-        # Historical sessions are revisited less often than the active one.
-        for session in self.repo.sessoes(group, workspace_id):
-            interval = 5 if str(session["id"]) == str(group["active_session_id"]) else 300
-            if sync_throttle.should_run(f"contact-sync:{workspace_id}:{session['id']}", interval):
-                try:
-                    if ai_conversas_bridge.sync_messages_for_conversa(session, workspace_id):
-                        invalidate_conversa(str(session["id"]), workspace_id)
-                except Exception:
-                    logger.exception("Falha ao sincronizar sessão do histórico do contato")
-        return [_map_mensagem(row) for row in self.repo.mensagens(
-            group, workspace_id, limit=limit, before=before, before_id=before_id, after=after)]
+
+        rows = self.repo.mensagens(
+            group, workspace_id, limit=limit, before=before, before_id=before_id, after=after)
+
+        # A abertura usa o historico persistido. A consulta ao provedor ocorre em
+        # segundo plano e o polling ao vivo recebe as novas mensagens em seguida.
+        if sync_throttle.should_run(f"contact-refresh:{workspace_id}:{group['id']}", 5):
+            _kick_contact_sync(group, workspace_id)
+        return [_map_mensagem(row) for row in rows]
 
     def atuar(self, conversation_id: str, workspace_id: str, action: str, *,
               actor_name: str, assignee_id: str | None = None, note: str | None = None) -> dict:
