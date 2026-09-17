@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -32,6 +32,16 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _pick(row: dict, *keys: str) -> Any:
@@ -129,8 +139,19 @@ class CommercialBiService:
             "completedAt": row.get("completed_at"),
         }
 
-    def _chatbo_contacts(self, workspace_id: str) -> tuple[set[str], set[str], int, int, int]:
+    def _chatbo_contacts(
+        self,
+        workspace_id: str,
+        *,
+        period_start: datetime | None = None,
+    ) -> tuple[set[str], set[str], int, int, int]:
         groups = self.contact_inbox.listar(workspace_id, limit=5000)
+        if period_start:
+            groups = [
+                group for group in groups
+                if (parsed := _parse_datetime(group.get("last_message_at"))) is not None
+                and parsed >= period_start
+            ]
         rows = [group.get("current_session") or {} for group in groups]
         phones: set[str] = set()
         emails: set[str] = set()
@@ -194,17 +215,11 @@ class CommercialBiService:
         customers_count: int,
         products_count: int,
     ) -> dict:
-        by_source = {"tray": 0.0, "chatbo": 0.0, "ecommerce": 0.0}
         confirmed = [o for o in attributed_orders if o["status"] in {"processing", "shipped", "delivered"}]
         delivered = [o for o in confirmed if o["status"] == "delivered"]
         pipeline = [o for o in attributed_orders if o["status"] == "pending"]
         receita = sum(o["total"] for o in confirmed)
         retida = sum(o["total"] for o in delivered)
-        for order in confirmed:
-            # 2C: tray = ecommerce Tray; chatbo só com vínculo; sem match permanece tray
-            key = "chatbo" if order["source"] == "chatbo" else "tray"
-            by_source[key] += order["total"]
-        by_source["ecommerce"] = by_source["tray"]  # alias explícito no painel
         ticket = (receita / len(confirmed)) if confirmed else 0.0
         return {
             "receitaVendida": round(receita, 2),
@@ -228,54 +243,34 @@ class CommercialBiService:
             "totalCustomers": customers_count,
             "totalProducts": products_count,
             "ticketMedio": round(ticket, 2),
-            "bySource": {
-                "tray": round(by_source["tray"], 2),
-                "chatbo": round(by_source["chatbo"], 2),
-                "ecommerce": round(by_source["ecommerce"], 2),
-            },
+            "dataScope": "chatbo_current_month",
         }
 
     def _entities(
         self,
-        customers: list[dict],
-        products: list[dict],
         attributed_orders: list[dict],
     ) -> dict:
-        cust_out = []
-        for row in customers[:40]:
-            email = str(_pick(row, "email", "Email") or "").strip().lower()
-            phone = _digits(_pick(row, "phone", "cellphone", "mobile"))
-            related = [
-                order for order in attributed_orders
-                if (email and order.get("customerEmail") == email)
-                or (phone and str(order.get("customerPhone") or "").endswith(phone[-11:]))
-            ]
-            cust_out.append(
-                {
-                    "id": str(_pick(row, "id", "Id") or ""),
-                    "name": str(_pick(row, "name", "Name") or "Cliente"),
-                    "email": email or None,
-                    "phone": phone or None,
-                    "ordersCount": len(related),
-                    "totalSpent": round(sum(order["total"] for order in related if order["status"] != "cancelled"), 2),
-                    "lastContact": max((str(order.get("createdAt") or "") for order in related), default=None),
-                    "source": "tray",
-                }
-            )
-        prod_out = []
-        for row in products[:40]:
-            prod_out.append(
-                {
-                    "id": str(_pick(row, "id", "Id", "product_id") or ""),
-                    "name": str(_pick(row, "name", "Name", "title") or "Produto"),
-                    "price": _safe_float(_pick(row, "price", "Price", "promotional_price")),
-                    "stock": _safe_float(_pick(row, "stock", "Stock"), 0),
-                    "source": "tray",
-                }
-            )
+        customers_by_key: dict[str, dict] = {}
+        for order in attributed_orders:
+            key = str(order.get("customerPhone") or order.get("customerEmail") or order.get("customerName") or order["id"])
+            customer = customers_by_key.setdefault(key, {
+                "id": key,
+                "name": order.get("customerName") or "Contato ChatBô",
+                "email": order.get("customerEmail"),
+                "phone": order.get("customerPhone"),
+                "ordersCount": 0,
+                "totalSpent": 0.0,
+                "lastContact": order.get("createdAt"),
+                "source": "chatbo",
+            })
+            if order["status"] != "cancelled":
+                customer["ordersCount"] += 1
+                customer["totalSpent"] = round(customer["totalSpent"] + order["total"], 2)
+            if str(order.get("createdAt") or "") > str(customer.get("lastContact") or ""):
+                customer["lastContact"] = order.get("createdAt")
         return {
-            "customers": cust_out,
-            "products": prod_out,
+            "customers": list(customers_by_key.values())[:40],
+            "products": [],
             "orders": attributed_orders[:80],
         }
 
@@ -293,11 +288,11 @@ class CommercialBiService:
             "summary": "string curta em pt-BR",
             "actions": ["lista de 3 a 5 ações concretas para aumentar vendas"],
             "risks": ["gargalos ou riscos"],
-            "opportunities": ["oportunidades ChatBô vs ecommerce"],
+            "opportunities": ["oportunidades atribuídas ao ChatBô no mês atual"],
         }
         prompt = (
             "Você é analista de BI comercial da New Store / ChatBô. "
-            "Com base no JSON de pedidos/clientes/produtos e atribuição tray|chatbo, "
+            "Com base somente nos resultados atribuídos ao ChatBô no mês atual, "
             "retorne APENAS JSON válido no formato: "
             f"{json.dumps(schema_hint, ensure_ascii=False)}. "
             "Não invente números fora do contexto.\n\n"
@@ -390,7 +385,7 @@ class CommercialBiService:
         except Exception as exc:
             logger.warning("Chat insights falhou: %s", exc)
         return {
-            "summary": "KPIs calculados a partir do TRAYadaptor; insights indisponíveis.",
+            "summary": "KPIs do ChatBô calculados para o mês atual; insights indisponíveis.",
             "actions": [],
             "model": model,
             "via": "deterministic",
@@ -403,6 +398,8 @@ class CommercialBiService:
         user_id: str | None = None,
         period_days: int = 30,
     ) -> dict:
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        period_days = max(1, (datetime.now(timezone.utc).date() - month_start.date()).days + 1)
         running = {
             "workspace_id": workspace_id,
             "period_days": period_days,
@@ -425,46 +422,44 @@ class CommercialBiService:
                 period_days=period_days,
                 page_size=50,
                 max_pages=40,
-                product_pages=2,
+                product_pages=0,
+                customer_pages=0,
+                calendar_month=True,
             )
-            phones, emails, active, waiting, total_contacts = self._chatbo_contacts(workspace_id)
+            phones, emails, active, waiting, total_contacts = self._chatbo_contacts(
+                workspace_id,
+                period_start=month_start,
+            )
             attributed = self._attribute_orders(sample["orders"], phones, emails)
+            chatbo_orders = [order for order in attributed if order["source"] == "chatbo"]
             kpis = self._build_kpis(
-                attributed,
+                chatbo_orders,
                 active_conversations=active,
                 waiting_queue=waiting,
-                customers_count=len(sample["customers"]),
-                products_count=len(sample["products"]),
+                customers_count=total_contacts,
+                products_count=0,
             )
             kpis["totalContacts"] = total_contacts
-            entities = self._entities(sample["customers"], sample["products"], attributed)
-            chatbo_count = sum(1 for o in attributed if o["source"] == "chatbo")
-            tray_count = sum(1 for o in attributed if o["source"] == "tray")
+            kpis["dataScope"] = "chatbo_current_month"
+            entities = self._entities(chatbo_orders)
+            chatbo_count = len(chatbo_orders)
             attribution = {
-                "rule": "2C",
+                "rule": "chatbo_contact_match",
                 "ordersChatbo": chatbo_count,
-                "ordersTray": tray_count,
                 "matchedByPhoneOrEmail": chatbo_count,
             }
             insight_context = {
                 "kpis": kpis,
                 "attribution": attribution,
                 "period": sample.get("period"),
-                "sampleOrders": attributed[:30],
-                "sampleProducts": entities["products"][:20],
+                "sampleOrders": chatbo_orders[:30],
                 "activeConversations": active,
             }
             insights = self._call_responses_insights(insight_context)
             source_meta = {
-                "adapterBaseUrl": getattr(client, "base_url", ""),
-                "pagesFetched": sample.get("pagesFetched"),
                 "period": sample.get("period"),
-                "filtersUsed": sample.get("filtersUsed"),
-                "rawCounts": sample.get("rawCounts"),
-                "ordersSample": len(sample["orders"]),
-                "customersSample": len(sample["customers"]),
-                "productsSample": len(sample["products"]),
-                "provider": "tray",
+                "attributedOrders": chatbo_count,
+                "scope": "chatbo_current_month",
             }
             update = {
                 "status": "ready",

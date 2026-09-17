@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urljoin
@@ -148,6 +149,43 @@ class TrayAdaptorClient:
         payload = self._get("internal/products", params)
         return _extract_items(payload, "Products", "Product", "products", "product")
 
+    def customer_detail(self, customer_id: str) -> dict:
+        payload = self._get(f"internal/customers/{customer_id}")
+        if not isinstance(payload, dict):
+            return {}
+        for key in ("customer", "Customer", "data"):
+            if isinstance(payload.get(key), dict):
+                return payload[key]
+        return payload
+
+    def _hydrate_order_customers(self, orders: list[dict], *, max_customers: int = 86) -> list[dict]:
+        """Anexa contato ao pedido para atribuição ChatBô sem expor a fonte no painel."""
+        customer_ids: list[str] = []
+        seen: set[str] = set()
+        for order in sorted(orders, key=lambda row: str(row.get("date") or row.get("created") or ""), reverse=True):
+            customer_id = str(order.get("customer_id") or "").strip()
+            if customer_id and customer_id not in seen:
+                seen.add(customer_id)
+                customer_ids.append(customer_id)
+            if len(customer_ids) >= max_customers:
+                break
+
+        details: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(self.customer_detail, customer_id): customer_id for customer_id in customer_ids}
+            for future in as_completed(futures):
+                try:
+                    detail = future.result()
+                except Exception:
+                    continue
+                if detail:
+                    details[futures[future]] = detail
+
+        return [
+            {**order, "Customer": details.get(str(order.get("customer_id") or ""), {})}
+            for order in orders
+        ]
+
     def _paginate(
         self,
         fetcher: Callable[..., list[dict]],
@@ -193,6 +231,7 @@ class TrayAdaptorClient:
         max_pages: int = 40,
         product_pages: int = 2,
         customer_pages: int = 6,
+        calendar_month: bool = False,
     ) -> dict[str, Any]:
         """Carrega pedidos do período (padrão 30 dias) via TRAYadaptor.
 
@@ -200,7 +239,11 @@ class TrayAdaptorClient:
         """
         days = max(1, int(period_days or 30))
         end = datetime.now(timezone.utc)
-        start = end - timedelta(days=days)
+        start = (
+            end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if calendar_month
+            else end - timedelta(days=days)
+        )
         start_day = start.date().isoformat()
         end_day = end.date().isoformat()
 
@@ -235,6 +278,8 @@ class TrayAdaptorClient:
                 stop_when_older=older_order,
             )
             filters_used = {}
+
+        orders = self._hydrate_order_customers(orders)
 
         customers, customer_pages_fetched = self._paginate(
             self.list_customers,

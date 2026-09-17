@@ -212,8 +212,8 @@ class VendasService:
                     bi = None
                 if bi and isinstance(bi.get("kpis"), dict):
                     kpis = bi["kpis"]
-                    # Prefer BI when local pedidos are empty.
-                    if not result.get("quantidadeVendas"):
+                    # O escopo ChatBô substitui qualquer total geral armazenado localmente.
+                    if not result.get("quantidadeVendas") or kpis.get("dataScope") == "chatbo_current_month":
                         pedidos = ((bi.get("entities") or {}).get("orders") or [])
                         por_status: dict[str, list[dict]] = defaultdict(list)
                         for pedido in pedidos:
@@ -244,7 +244,7 @@ class VendasService:
                             "valorPipeline": pipeline_valor,
                             "pipelineValor": pipeline_valor,
                             "pipelineNegocios": pipeline_qtd,
-                            "taxaConversao": _pct(entregues, contatos or vendidos),
+                            "taxaConversao": _pct(vendidos, contatos or vendidos),
                             "taxaRetencao": _pct(retida, receita),
                             "valorCancelado": float((kpis.get("valoresPorStatus") or {}).get("cancelled") or _sum_total(por_status["cancelled"])),
                             "porStatus": [
@@ -287,7 +287,8 @@ class VendasService:
                             etapa["quedaPct"] = round(max(0.0, 100.0 - _pct(quantidade, anterior)), 1)
                             anterior = max(quantidade, 1)
                     result["commercialBi"] = bi
-                    result["bySource"] = kpis.get("bySource") or {}
+                    if kpis.get("dataScope") != "chatbo_current_month" and kpis.get("bySource"):
+                        result["bySource"] = kpis["bySource"]
             return result
         except Exception as exc:
             logger.exception("Erro ao calcular métricas de venda: %s", exc)

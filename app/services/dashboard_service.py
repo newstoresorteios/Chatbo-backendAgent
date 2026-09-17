@@ -25,6 +25,11 @@ def _day_key(dt: datetime) -> str:
     return dt.strftime("%d/%m")
 
 
+def _month_start() -> datetime:
+    now = datetime.utcnow()
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 def _contar_por_dia(rows: list[dict], date_field: str, days: int = 7) -> dict[str, int]:
     hoje = datetime.utcnow().date()
     inicio = hoje - timedelta(days=days - 1)
@@ -188,8 +193,13 @@ class DashboardService:
     def _contar_conversas_por_status(self, workspace_id: str | None = None) -> dict[str, int]:
         try:
             if workspace_id:
-                rows = self.contact_inbox.listar(workspace_id, limit=5000)
-                rows = [row.get("current_session") or {} for row in rows]
+                groups = self.contact_inbox.listar(workspace_id, limit=5000)
+                rows = [
+                    row.get("current_session") or {}
+                    for row in groups
+                    if (parsed := _parse_date(row.get("last_message_at"))) is not None
+                    and parsed >= _month_start()
+                ]
             else:
                 rows = self.conversas.listar(workspace_id=workspace_id)
         except Exception:
@@ -212,7 +222,11 @@ class DashboardService:
         if not workspace_id:
             return []
         try:
-            return self.contact_inbox.listar(workspace_id, limit=5000)
+            return [
+                row for row in self.contact_inbox.listar(workspace_id, limit=5000)
+                if (parsed := _parse_date(row.get("last_message_at"))) is not None
+                and parsed >= _month_start()
+            ]
         except Exception:
             return []
 
@@ -245,6 +259,7 @@ class DashboardService:
                 query = supabase.table("mensagens").select("sender,conversa_id,created_at")
                 if workspace_id:
                     query = apply_workspace_filter(query, workspace_id)
+                query = query.gte("created_at", _month_start().isoformat())
                 batch = query.range(start, start + page_size - 1).execute().data or []
                 rows.extend(batch)
                 if len(batch) < page_size:

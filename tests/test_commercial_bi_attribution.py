@@ -32,5 +32,25 @@ def test_build_kpis_by_source():
     assert kpis["pipelineEmAberto"] == 20.0
     assert kpis["oportunidadesEmAberto"] == 1
     assert kpis["pedidosEntregues"] == 1
-    assert kpis["bySource"]["chatbo"] == 40.0
-    assert kpis["bySource"]["tray"] == 100.0
+    assert kpis["dataScope"] == "chatbo_current_month"
+    assert "bySource" not in kpis
+
+
+def test_entities_only_include_customers_from_attributed_chatbo_orders():
+    service = CommercialBiService()
+    entities = service._entities([
+        {
+            "id": "order-1",
+            "total": 250.0,
+            "status": "shipped",
+            "source": "chatbo",
+            "customerName": "Cliente ChatBô",
+            "customerEmail": None,
+            "customerPhone": "5511999999999",
+            "createdAt": "2026-09-10T12:00:00Z",
+        }
+    ])
+    assert len(entities["customers"]) == 1
+    assert entities["customers"][0]["source"] == "chatbo"
+    assert entities["products"] == []
+    assert len(entities["orders"]) == 1
