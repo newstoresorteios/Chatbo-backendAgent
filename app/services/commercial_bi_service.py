@@ -187,24 +187,33 @@ class CommercialBiService:
         orders: list[dict],
         chatbo_phones: set[str],
         chatbo_emails: set[str],
+        chatbo_order_evidence: dict[str, set[str]],
+        chatbo_session_evidence: dict[str, set[str]],
     ) -> list[dict]:
         attributed: list[dict] = []
         for order in orders:
             contact = _order_contact(order)
             phone = contact["phone"]
             phone_key = phone[-11:] if len(phone) > 11 else phone
-            matched = False
+            contact_matched = False
             if contact["email"] and contact["email"] in chatbo_emails:
-                matched = True
+                contact_matched = True
             if phone_key and phone_key in chatbo_phones:
-                matched = True
+                contact_matched = True
+            order_id = str(_pick(order, "id", "Id", "order_id") or "").strip()
+            session_id = str(_pick(order, "session_id", "cart_session_id") or "").strip()
+            evidence_phones = set(chatbo_order_evidence.get(order_id, set()))
+            evidence_phones.update(chatbo_session_evidence.get(session_id, set()))
+            commerce_matched = bool(phone_key and phone_key in evidence_phones)
+            matched = contact_matched and commerce_matched
             source = "chatbo" if matched else "tray"
             attributed.append(
                 {
-                    "id": str(_pick(order, "id", "Id", "order_id") or ""),
+                    "id": order_id,
                     "total": _order_total(order),
                     "status": _order_status(order),
                     "source": source,
+                    "attributionReason": "verified_commerce_link" if matched else None,
                     "customerName": contact["name"] or None,
                     "customerEmail": contact["email"] or None,
                     "customerPhone": contact["phone"] or None,
@@ -212,6 +221,79 @@ class CommercialBiService:
                 }
             )
         return attributed
+
+    def _chatbo_order_evidence(
+        self,
+        workspace_id: str,
+        chatbo_phones: set[str],
+    ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+        if not chatbo_phones:
+            return {}, {}
+        candidates: set[str] = set()
+        for phone in chatbo_phones:
+            digits = _digits(phone)
+            if not digits:
+                continue
+            candidates.add(digits)
+            candidates.add(f"whatsapp:{digits}")
+            if len(digits) == 11:
+                candidates.add(f"55{digits}")
+                candidates.add(f"whatsapp:55{digits}")
+
+        try:
+            contact_phones_by_id: dict[str, set[str]] = {}
+            for column in ("sender_phone", "sender_key", "identity_key", "sender_external_id"):
+                rows = (
+                    supabase.table("ai_remarketing_contacts")
+                    .select("id,workspace_id,sender_phone,sender_key,identity_key,sender_external_id")
+                    .in_(column, list(candidates))
+                    .limit(5000)
+                    .execute()
+                    .data
+                    or []
+                )
+                for row in rows:
+                    row_workspace = row.get("workspace_id")
+                    if row_workspace in (None, "", workspace_id) and row.get("id") is not None:
+                        row_phones = {
+                            (digits[-11:] if len(digits) > 11 else digits)
+                            for value in (
+                                row.get("sender_phone"),
+                                row.get("sender_key"),
+                                row.get("identity_key"),
+                                row.get("sender_external_id"),
+                            )
+                            if (digits := _digits(value))
+                        }
+                        matched_phones = row_phones.intersection(chatbo_phones)
+                        if matched_phones:
+                            contact_phones_by_id.setdefault(str(row["id"]), set()).update(matched_phones)
+            contact_ids = list(contact_phones_by_id)
+            if not contact_ids:
+                return {}, {}
+
+            order_evidence: dict[str, set[str]] = {}
+            session_evidence: dict[str, set[str]] = {}
+            for offset in range(0, len(contact_ids), 100):
+                statuses = (
+                    supabase.table("ai_conversation_statuses")
+                    .select("contact_id,order_id,cart_session_id")
+                    .in_("contact_id", contact_ids[offset:offset + 100])
+                    .limit(5000)
+                    .execute()
+                    .data
+                    or []
+                )
+                for row in statuses:
+                    phones = contact_phones_by_id.get(str(row.get("contact_id")), set())
+                    if row.get("order_id") and phones:
+                        order_evidence.setdefault(str(row["order_id"]).strip(), set()).update(phones)
+                    if row.get("cart_session_id") and phones:
+                        session_evidence.setdefault(str(row["cart_session_id"]).strip(), set()).update(phones)
+            return order_evidence, session_evidence
+        except Exception as exc:
+            logger.warning("Evidências de pedidos do ChatBô indisponíveis: %s", exc)
+            return {}, {}
 
     def _enrich_order_items(self, client: Any, orders: list[dict]) -> list[dict]:
         enriched: list[dict] = []
@@ -468,7 +550,17 @@ class CommercialBiService:
                 workspace_id,
                 period_start=month_start,
             )
-            attributed = self._attribute_orders(sample["orders"], phones, emails)
+            order_evidence, session_evidence = self._chatbo_order_evidence(
+                workspace_id,
+                phones,
+            )
+            attributed = self._attribute_orders(
+                sample["orders"],
+                phones,
+                emails,
+                order_evidence,
+                session_evidence,
+            )
             chatbo_orders = [order for order in attributed if order["source"] == "chatbo"]
             chatbo_orders = self._enrich_order_items(client, chatbo_orders)
             kpis = self._build_kpis(
@@ -483,9 +575,9 @@ class CommercialBiService:
             entities = self._entities(chatbo_orders)
             chatbo_count = len(chatbo_orders)
             attribution = {
-                "rule": "chatbo_contact_match",
+                "rule": "verified_chatbo_commerce_link",
                 "ordersChatbo": chatbo_count,
-                "matchedByPhoneOrEmail": chatbo_count,
+                "matchedByOrderOrCartSession": chatbo_count,
             }
             insight_context = {
                 "kpis": kpis,

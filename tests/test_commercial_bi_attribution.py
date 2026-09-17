@@ -7,9 +7,43 @@ def test_attribute_orders_marks_chatbo_by_phone():
         {"id": 1, "total": 100, "status": "paid", "customer_phone": "11999998888", "customer_email": "a@x.com"},
         {"id": 2, "total": 50, "status": "delivered", "customer_phone": "11888887777", "customer_email": "b@x.com"},
     ]
-    attributed = service._attribute_orders(orders, {"11999998888"}, set())
+    attributed = service._attribute_orders(
+        orders,
+        {"11999998888"},
+        set(),
+        {"1": {"11999998888"}},
+        {},
+    )
     assert attributed[0]["source"] == "chatbo"
     assert attributed[1]["source"] == "tray"
+
+
+def test_attribute_orders_rejects_phone_only_match_without_commerce_evidence():
+    service = CommercialBiService()
+    attributed = service._attribute_orders(
+        [{"id": 25894, "session_id": "external-cart", "customer_phone": "43998640480"}],
+        {"43998640480"},
+        {},
+        {},
+        {},
+    )
+
+    assert attributed[0]["source"] == "tray"
+    assert attributed[0]["attributionReason"] is None
+
+
+def test_attribute_orders_accepts_verified_cart_session_for_same_contact():
+    service = CommercialBiService()
+    attributed = service._attribute_orders(
+        [{"id": 100, "session_id": "chatbo-cart", "customer_phone": "11999998888"}],
+        {"11999998888"},
+        set(),
+        {},
+        {"chatbo-cart": {"11999998888"}},
+    )
+
+    assert attributed[0]["source"] == "chatbo"
+    assert attributed[0]["attributionReason"] == "verified_commerce_link"
 
 
 def test_build_kpis_by_source():
