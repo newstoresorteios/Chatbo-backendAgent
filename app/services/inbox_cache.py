@@ -53,11 +53,13 @@ class TtlCache:
 # Respostas HTTP curtas (evita reprocessar sync a cada poll do front).
 mensagens_cache = TtlCache()
 conversas_cache = TtlCache()
+contact_groups_cache = TtlCache()
 # Controle de sync NSAgent (não precisa a cada request).
 sync_throttle = TtlCache()
 
 MENSAGENS_TTL = 0.75
 CONVERSAS_TTL = 2.0
+CONTACT_GROUP_TTL = 8.0
 SYNC_MSG_INTERVAL = 1.5
 SYNC_WORKSPACE_INTERVAL = 3.0
 

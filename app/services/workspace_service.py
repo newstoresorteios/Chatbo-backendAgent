@@ -7,6 +7,7 @@ from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.settings_repository import SettingsRepository
 from app.repositories.persona_repository import PersonaRepository
 from app.repositories.workspace_repository import WorkspaceRepository
+from app.services.inbox_cache import TtlCache
 
 logger = logging.getLogger(__name__)
 
@@ -26,20 +27,23 @@ LEGACY_STEP_MAP = {
     "activation": "ativacao",
     "test": "teste",
 }
-
-
 class WorkspaceService:
     def __init__(self):
         self.repo = WorkspaceRepository()
         self.settings_repo = SettingsRepository()
         self.persona_repo = PersonaRepository()
         self.catalog_repo = CatalogRepository()
+        self._context_cache = TtlCache()
 
     def _missing_schema(self, exc: Exception) -> bool:
         text = str(exc).lower()
         return any(name in text for name in ("workspace_members", "workspaces", "workspace_settings", "workspace_onboarding"))
 
     def get_current_workspace_context(self, usuario: dict) -> dict:
+        user_id = str(usuario.get("id"))
+        cached = self._context_cache.get(f"workspace-context:{user_id}")
+        if cached is not None:
+            return cached
         account_type = usuario.get("account_type") if usuario.get("account_type") == "system_admin" else "workspace_user"
         try:
             membership = self.repo.buscar_membership_ativo(str(usuario.get("id")))
@@ -71,7 +75,7 @@ class WorkspaceService:
             except Exception:
                 logger.exception("Falha ao marcar onboarding completo para workspace %s", workspace_id)
             onboarding = {**onboarding, "status": "complete"}
-        return {
+        context = {
             "workspaceId": workspace_id,
             "companyId": workspace_id,
             "workspaceName": workspace.get("name") or usuario.get("empresa") or "NITRUS",
@@ -79,6 +83,8 @@ class WorkspaceService:
             "onboardingStatus": (onboarding.get("status") if onboarding else None) or "complete",
             "accountType": account_type,
         }
+        self._context_cache.set(f"workspace-context:{user_id}", context, 5.0)
+        return context
 
     def criar_workspace_inicial(self, *, user_id: str, name: str) -> dict:
         workspace = self.repo.criar_workspace(name=name)

@@ -7,12 +7,19 @@ from fastapi import HTTPException
 
 from app.repositories.contact_inbox_repository import ContactInboxRepository
 from app.services.conversas_service import ConversasService, PERFIL_DEPARTAMENTO, _map_conversa, _map_mensagem
-from app.services.inbox_cache import conversas_cache, invalidate_conversa
+from app.services.inbox_cache import CONTACT_GROUP_TTL, contact_groups_cache, conversas_cache, invalidate_conversa
 
 logger = logging.getLogger(__name__)
 
 _contact_sync_lock = Lock()
 _syncing_contacts: set[str] = set()
+
+
+def _cache_contact_groups(rows: list[dict], workspace_id: str) -> None:
+    for row in rows:
+        ids = [str(row["id"]), *(str(value) for value in row.get("session_ids") or [])]
+        for contact_id in ids:
+            contact_groups_cache.set(f"contact-group:{workspace_id}:{contact_id}", row, CONTACT_GROUP_TTL)
 
 
 def _sync_contact_messages(group: dict, workspace_id: str) -> None:
@@ -89,8 +96,10 @@ class ContactInboxService:
         key = f"conversas:{workspace_id}:contacts:{limit}:{before or 'latest'}"
         cached = conversas_cache.get(key)
         if cached is not None:
+            _cache_contact_groups(cached, workspace_id)
             return cached
         rows = self.repo.listar(workspace_id, limit=limit, before=before)
+        _cache_contact_groups(rows, workspace_id)
         users = self.sessions._users_index()
         result = [map_contact(row, users) for row in rows]
         conversas_cache.set(key, result, 2.0)
@@ -103,7 +112,9 @@ class ContactInboxService:
                 datetime.fromisoformat((before or "").replace("Z", "+00:00"))
             except ValueError as exc:
                 raise HTTPException(422, "Informe a data da mensagem anterior junto ao identificador") from exc
-        group = self.obter(conversation_id, workspace_id)
+        group = contact_groups_cache.get(f"contact-group:{workspace_id}:{conversation_id}")
+        if group is None:
+            group = self.obter(conversation_id, workspace_id)
         from app.services.inbox_cache import sync_throttle
 
         rows = self.repo.mensagens(

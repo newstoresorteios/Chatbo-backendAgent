@@ -73,13 +73,28 @@ def test_messages_returns_persisted_page_and_schedules_contact_refresh():
     svc = service()
     svc.repo.mensagens.return_value = [{"id": "msg-old", "conversa_id": "old", "content": "older"},
                                      {"id": "msg-new", "conversa_id": "new", "content": "newer"}]
-    with patch('app.services.inbox_cache.sync_throttle') as throttle, patch('app.services.contact_inbox_service._kick_contact_sync') as kick:
+    with patch('app.services.inbox_cache.sync_throttle') as throttle, \
+            patch('app.services.contact_inbox_service._kick_contact_sync') as kick, \
+            patch('app.services.contact_inbox_service.contact_groups_cache') as group_cache:
         throttle.should_run.return_value = True
+        group_cache.get.return_value = None
         result = svc.mensagens('old', 'ws', limit=60, before='2026-09-15T13:00:00Z')
     kick.assert_called_once_with(group(), 'ws')
     svc.repo.sessoes.assert_not_called()
     assert [m['conversationId'] for m in result] == ['old', 'new']
     assert svc.repo.mensagens.call_args.kwargs['limit'] == 60
+
+
+def test_messages_reuses_contact_group_warmed_by_list():
+    svc = service()
+    svc.repo.mensagens.return_value = []
+    with patch('app.services.inbox_cache.sync_throttle') as throttle, \
+            patch('app.services.contact_inbox_service._kick_contact_sync'), \
+            patch('app.services.contact_inbox_service.contact_groups_cache') as group_cache:
+        throttle.should_run.return_value = False
+        group_cache.get.return_value = group()
+        svc.mensagens('old', 'ws')
+    svc.repo.obter.assert_not_called()
 
 
 def test_background_refresh_syncs_each_due_provider_session():

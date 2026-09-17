@@ -7,18 +7,26 @@ from jose import ExpiredSignatureError, JWTError, jwt
 from app.config.settings import JWT_ALGORITHM, JWT_SECRET
 from app.repositories.token_repository import TokenRepository
 from app.repositories.usuario_repository import UsuarioRepository
+from app.services.inbox_cache import TtlCache
 
 security = HTTPBearer()
 _tokens = TokenRepository()
 _usuarios = UsuarioRepository()
+_active_user_cache = TtlCache()
+_revocation_cache = TtlCache()
+_auth_maintenance = TtlCache()
 
 
 def _validar_usuario_ativo(usuario_id: str) -> dict:
+    cached = _active_user_cache.get(usuario_id)
+    if cached is not None:
+        return cached
     usuario = _usuarios.buscar_por_id(usuario_id)
     if not usuario:
         raise HTTPException(status_code=401, detail="Usuário não encontrado")
     if usuario.get("ativo") is False:
         raise HTTPException(status_code=403, detail="Usuário inativo")
+    _active_user_cache.set(usuario_id, usuario, 5.0)
     return usuario
 
 
@@ -45,9 +53,14 @@ def obter_token_payload(
     jti = payload.get("jti")
     if jti:
         try:
-            _tokens.limpar_revogados_expirados()
-            if _tokens.jti_revogado(jti):
-                raise HTTPException(status_code=401, detail="Sessão encerrada")
+            if _auth_maintenance.should_run("revoked-token-cleanup", 300):
+                _tokens.limpar_revogados_expirados()
+            revoked = _revocation_cache.get(jti)
+            if revoked is None:
+                revoked = _tokens.jti_revogado(jti)
+                _revocation_cache.set(jti, revoked, 5.0)
+            if revoked:
+                raise HTTPException(status_code=401, detail="Sessao encerrada")
         except HTTPException:
             raise
         except Exception:
@@ -61,6 +74,7 @@ def obter_token_payload(
         "role": usuario.get("perfil") or "user",
         "jti": jti,
         "exp": payload.get("exp"),
+        "_usuario": usuario,
     }
 
 
@@ -73,7 +87,7 @@ def obter_usuario_id(payload: dict = Depends(obter_token_payload)) -> str:
 
 
 def obter_usuario_atual(payload: dict = Depends(obter_token_payload)) -> dict:
-    return _validar_usuario_ativo(payload.get("sub", ""))
+    return payload.get("_usuario") or _validar_usuario_ativo(payload.get("sub", ""))
 
 
 def obter_workspace_context(usuario: dict = Depends(obter_usuario_atual)) -> dict:
