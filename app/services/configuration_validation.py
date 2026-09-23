@@ -134,6 +134,11 @@ def validate_values(values: dict, fields: list[dict], *, current: dict | None = 
                 error = "informe uma URL HTTPS oficial, sem credenciais"
         if error:
             raise HTTPException(status_code=422, detail=f"{field['label']}: {error}")
+    from app.services.agent_quality_validation import validate_quality_controls
+    try:
+        validate_quality_controls(result)
+    except (ValueError, TypeError, re.error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     errors = [item["message"] for item in configuration_diagnostics(result) if item["level"] == "error"]
     if errors:
         raise HTTPException(status_code=422, detail=" ".join(errors))
