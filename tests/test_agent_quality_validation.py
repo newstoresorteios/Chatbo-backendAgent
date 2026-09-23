@@ -17,3 +17,8 @@ def test_role_capabilities_checked_before_publication():
 
 def test_disabled_campaign_needs_no_credentials_or_pricing():
     validate_quality_controls({'evaluationCampaignPolicy':'{"enabled":false,"max_calls":0}'})
+
+@pytest.mark.parametrize('value',[0,-1,True,'2',float('nan')])
+def test_invalid_comparison_limits_rejected(value):
+    with pytest.raises(ValueError):
+        validate_quality_controls({'evaluationCampaignPolicy':json.dumps({'comparison_limits':{'max_cost_ratio':value}})})

@@ -51,6 +51,12 @@ def validate_quality_controls(values):
                 raise ValueError('Expressão institucional inválida')
             re.compile(value)
     campaign = object_value('evaluationCampaignPolicy')
+    limits = campaign.get('comparison_limits', {})
+    if not isinstance(limits, dict) or set(limits) - {'max_cost_ratio','max_latency_ratio'}:
+        raise ValueError('Limites de comparação inválidos')
+    for value in limits.values():
+        if type(value) not in (int,float) or not math.isfinite(value) or value <= 0:
+            raise ValueError('Limite de comparação deve ser positivo e finito')
     if campaign.get('enabled'):
         if not campaign.get('campaign_id') or not campaign.get('price_version'):
             raise ValueError('Defina campanha e versão dos preços')
