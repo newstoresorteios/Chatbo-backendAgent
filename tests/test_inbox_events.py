@@ -2,6 +2,8 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 from app.services.inbox_events import InboxEvents
+from app.services.inbox_events import is_new_customer_message
+from datetime import datetime, timezone, timedelta
 from app.services.ai_conversas_bridge import AiConversasBridge
 
 
@@ -11,11 +13,32 @@ def test_events_isolate_workspaces_and_timeout_without_data():
         cursor = hub.cursor('a')
         await hub.publish('b')
         result = await hub.wait('a', cursor, timeout=0.001)
-        assert result == {'cursor': cursor, 'changed': False, 'realtime': False}
+        assert result == {'cursor': cursor, 'changed': False, 'realtime': False,
+                          'incoming': {'cursor': f'{hub.boot}:0', 'at': 0}}
         await hub.publish('a')
         assert (await hub.wait('a', cursor))['changed'] is True
         assert (await hub.wait('b', ''))['cursor'] != hub.cursor('a')
     asyncio.run(check())
+
+
+def test_sound_signal_only_for_customer_inserts_not_history_or_duplicates():
+    hub = InboxEvents()
+    row = {'id': 1, 'created_at': datetime.now(timezone.utc).isoformat()}
+    assert is_new_customer_message('ai_inbound_messages', row, 'INSERT')
+    assert not is_new_customer_message('ai_inbound_messages', row, 'UPDATE')
+    assert not is_new_customer_message('ai_agent_responses', row, 'INSERT')
+    assert not is_new_customer_message('mensagens', {'sender': 'ai'}, 'INSERT')
+    assert not is_new_customer_message('mensagens', {'sender': 'customer', 'external_id': 'ai-in-1'}, 'INSERT')
+    assert is_new_customer_message('mensagens', {'sender': 'customer'}, 'INSERT')
+    hub.mark_incoming('a', 'ai_inbound_messages', row, 'INSERT')
+    first = hub.incoming['a'].copy()
+    hub.mark_incoming('a', 'ai_inbound_messages', row, 'INSERT')
+    assert hub.incoming['a'] == first
+    assert 'b' not in hub.incoming
+    old = {'id': 2, 'created_at': (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}
+    hub.mark_incoming('a', 'ai_inbound_messages', old, 'INSERT')
+    hub.mark_incoming('a', 'ai_inbound_messages', {'id': 3, 'created_at': 'invalid'}, 'INSERT')
+    assert hub.incoming['a'] == first
 
 
 def test_pending_wait_wakes_on_change_and_restarts_resync():

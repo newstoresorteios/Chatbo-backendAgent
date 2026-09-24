@@ -37,3 +37,19 @@ cheia/Realtime indisponível. A fila é limitada; perdas são recuperadas pelo
 polling. DELETE sem workspace não é distribuído e depende dessa reconciliação.
 
 Documentação consultada: https://supabase.com/docs/guides/realtime/postgres-changes
+
+## Som de nova mensagem
+
+O endpoint inclui `incoming` (cursor opaco e instante, sem dados do cliente).
+Somente INSERT de entrada AI ou mensagem customer não importada da AI avança
+esse sinal. Histórico antigo, UPDATE, eco da importação `ai-in-*`, respostas AI
+e IDs repetidos não tocam. O frontend ignora a primeira leitura, reinícios do
+backend e sinais com mais de 15 segundos; agrupa rajadas com intervalo de 2s.
+
+Na Central, “Ativar som” libera Web Audio por clique e toca uma amostra original
+de três notas. “Som ligado” permite silenciar. Ativação vale para a página aberta
+(recarregar exige novo clique, respeitando bloqueio de autoplay do navegador).
+Enquanto ativo, o canal de eventos permanece conectado mesmo com aba oculta;
+o navegador/sistema ainda pode suspender abas. Fechar a Central encerra o áudio.
+Não há áudio externo, downloads nem novas dependências. Requer backend/frontend
+publicados e Realtime habilitado; polling sozinho não gera aviso sonoro.
