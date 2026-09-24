@@ -96,7 +96,6 @@ class ContactInboxService:
         key = f"conversas:{workspace_id}:contacts:{limit}:{before or 'latest'}"
         cached = conversas_cache.get(key)
         if cached is not None:
-            _cache_contact_groups(cached, workspace_id)
             return cached
         rows = self.repo.listar(workspace_id, limit=limit, before=before)
         _cache_contact_groups(rows, workspace_id)

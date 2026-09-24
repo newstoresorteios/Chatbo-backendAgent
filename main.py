@@ -1,5 +1,6 @@
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -35,9 +36,17 @@ from app.routes.agent_learning import router as agent_learning_router
 
 validar_jwt_secret()
 
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    from app.services.inbox_events import inbox_events
+    await inbox_events.close()
+
 app = FastAPI(
     title="PulseDesk Backend",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

@@ -43,6 +43,21 @@ def _actor_name(payload: dict) -> str:
     return payload.get("email") or "Atendente"
 
 
+@router.get("/conversas/events")
+async def conversation_events(
+    cursor: str = Query(default="", max_length=100),
+    context: dict = Depends(obter_company_context),
+):
+    """Authenticated long poll: no credentials in URLs, no customer data in events."""
+    from fastapi.responses import JSONResponse
+    from app.services.inbox_events import inbox_events
+
+    workspace = workspace_id_from_context(context)
+    inbox_events.ensure_started()
+    result = await inbox_events.wait(workspace, cursor)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/conversas")
 def get_conversas(
     limit: int = Query(default=60, ge=1, le=200),

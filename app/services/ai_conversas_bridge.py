@@ -757,6 +757,27 @@ class AiConversasBridge:
 
         return written
 
+    def sync_event(self, table: str, row: dict) -> None:
+        """Materialize only the affected thread, including messages, before notifying UI."""
+        workspace = str(row.get("workspace_id") or "")
+        if not workspace or table not in {"ai_inbound_messages", "ai_agent_responses"}:
+            return
+        sample = row
+        if table == "ai_agent_responses":
+            if not row.get("inbound_id"):
+                return
+            rows = self._query_ai_in("ai_inbound_messages", "id", [str(row["inbound_id"])], workspace_id=workspace)
+            if not rows:
+                return
+            sample = rows[0]
+        if str(sample.get("workspace_id") or "") != workspace:
+            return
+        key = _thread_key(sample)
+        if not key:
+            return
+        conversa = self._ensure_conversa(workspace, key, sample)
+        self.sync_messages_for_conversa(conversa, workspace)
+
     def sync_workspace(self, workspace_id: str) -> int:
         """Materializa todas as threads recentes do NSAgent na inbox (sem copiar mensagens)."""
         if not workspace_id:
