@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from app.core.workspace_scope import stamp_workspace
@@ -33,6 +33,31 @@ RESPONSE_LIST_COLUMNS = (
 INBOX_PAGE_SIZE = 500
 INBOX_MAX_ROWS = 2500
 IN_QUERY_CHUNK = 80
+
+
+def _new_customer_activity_patch(conversa: dict, inbounds: list[dict]) -> dict:
+    """Reopen a bot-enabled thread for new input, never for history replay."""
+    if (conversa.get("status") != "closed" or conversa.get("assigned_to")
+            or conversa.get("bot_activated") is not True or conversa.get("merged_into")):
+        return {}
+
+    def timestamp(value):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except (ValueError, TypeError):
+            return None
+
+    previous = timestamp(conversa.get("last_message_at"))
+    if previous is None:
+        return {}
+    updated = timestamp(conversa.get("updated_at"))
+    if updated is not None:
+        previous = max(previous, updated)
+    if any((created := timestamp(row.get("created_at"))) is not None and created > previous
+           for row in inbounds):
+        return {"status": "active"}
+    return {}
 
 
 def _thread_key(row: dict) -> str | None:
@@ -685,6 +710,7 @@ class AiConversasBridge:
             patch["contact_phone"] = sender_key
         if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
             patch["bot_activated"] = True
+        patch.update(_new_customer_activity_patch(conversa, inbounds))
         patch.update(_confirmed_handoff_patch(conversa, responses))
         updated = self.conversas.atualizar(
             conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
@@ -747,6 +773,7 @@ class AiConversasBridge:
                     patch["external_thread_id"] = conv_id
                 if sender_key:
                     patch["contact_phone"] = sender_key
+                patch.update(_new_customer_activity_patch(conversa, inbounds))
                 patch.update(_confirmed_handoff_patch(conversa, responses))
                 self.conversas.atualizar(
                     conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
