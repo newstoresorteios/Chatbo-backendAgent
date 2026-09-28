@@ -91,6 +91,25 @@ def test_configuration_rejects_unknown_or_unsafe_fields(service):
     assert error.value.status_code == 422
 
 
+def test_workspace_catalog_overrides_hide_ns_fields_and_replace_mai_defaults():
+    service = AgentRegistryService()
+    fields = [
+        {"key": "business.agent_name", "type": "text", "default": "Crono"},
+        {"key": "business.credit_bands", "type": "textarea", "default": "[]"},
+    ]
+    row = {
+        "configuration": {
+            "catalogOverrides": {
+                "business.agent_name": {"default": "Mai", "label": "Nome da Mai"},
+                "business.credit_bands": {"hidden": True},
+            }
+        }
+    }
+    assert service._configuration_fields(row, fields) == [
+        {"key": "business.agent_name", "type": "text", "default": "Mai", "label": "Nome da Mai"}
+    ]
+
+
 def test_legacy_agent_update_cannot_bypass_validation(service):
     with pytest.raises(HTTPException) as error:
         service.atualizar_agente_empresa(

@@ -47,12 +47,28 @@ class AgentRegistryService:
         values = runtime.get("values") if isinstance(runtime, dict) else {}
         return validate_values(values or {}, fields, current=values or {})
 
+    def _configuration_fields(self, row: dict | None, fields: list[dict]) -> list[dict]:
+        """Apply workspace-owned catalog presentation without changing other tenants."""
+        configuration = (row or {}).get("configuration") or {}
+        overrides = configuration.get("catalogOverrides") if isinstance(configuration, dict) else {}
+        if not isinstance(overrides, dict):
+            overrides = {}
+        resolved: list[dict] = []
+        for field in fields:
+            patch = overrides.get(field.get("key")) or {}
+            if not isinstance(patch, dict):
+                patch = {}
+            if patch.get("hidden") is True:
+                continue
+            resolved.append({**field, **{key: value for key, value in patch.items() if key != "hidden"}})
+        return resolved
+
     def obter_configuracao(self, usuario: dict) -> dict:
         context = workspace_service.get_current_workspace_context(usuario)
         workspace_id = str(context["workspaceId"])
         try:
             row = self.repo.obter_por_workspace(workspace_id)
-            fields = self.repo.listar_configuracoes()
+            fields = self._configuration_fields(row, self.repo.listar_configuracoes())
             if not fields:
                 raise HTTPException(status_code=503, detail="Catálogo de configuração ainda não publicado.")
             values = self._configuration_values(row, fields)
@@ -76,7 +92,7 @@ class AgentRegistryService:
         workspace_id = str(context["workspaceId"])
         try:
             current = self.repo.obter_por_workspace(workspace_id) or {}
-            fields = self.repo.listar_configuracoes()
+            fields = self._configuration_fields(current, self.repo.listar_configuracoes())
             current_values = self._configuration_values(current, fields)
             values = validate_values(payload.get("values") or {}, fields, current=current_values)
             existing = current.get("configuration") or {}
