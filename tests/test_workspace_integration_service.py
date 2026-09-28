@@ -1,4 +1,5 @@
 from app.services.workspace_integration_service import WorkspaceIntegrationService
+from app.services.mercos_adaptor_client import MercosAdaptorClient
 
 
 class FakeQuery:
@@ -106,3 +107,26 @@ def test_upsert_mercos_keeps_existing_token_when_blank(monkeypatch):
     )
 
     assert saved["configuration"]["adapterToken"] == "saved-token"
+
+
+def test_client_from_workspace_selects_mercos_client(monkeypatch):
+    rows = [{
+        "id": "mercos-row",
+        "workspace_id": "workspace-1",
+        "provider": "mercos",
+        "status": "connected",
+        "configuration": {
+            "adapterBaseUrl": "https://mercos-adaptor.test",
+            "adapterToken": "internal-key",
+        },
+        "updated_at": "2026-09-01T00:00:00",
+    }]
+    monkeypatch.setattr(
+        "app.services.workspace_integration_service.supabase",
+        FakeSupabase(rows),
+    )
+
+    client = WorkspaceIntegrationService().client_from_workspace("workspace-1")
+
+    assert isinstance(client, MercosAdaptorClient)
+    assert client._headers()["x-api-key"] == "internal-key"

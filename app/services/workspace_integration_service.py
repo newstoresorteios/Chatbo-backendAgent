@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
+from app.services.mercos_adaptor_client import MercosAdaptorClient
 from app.services.supabase_service import supabase
 from app.services.tray_adaptor_client import TrayAdaptorClient
 
@@ -164,7 +165,8 @@ class WorkspaceIntegrationService:
         token = str(config.get("adapterToken") or "").strip()
         if not base or not token:
             raise HTTPException(status_code=400, detail=f"Configuração do {label} incompleta.")
-        return TrayAdaptorClient(base, token)
+        client_type = MercosAdaptorClient if provider == "mercos" else TrayAdaptorClient
+        return client_type(base, token)
 
     def test_connection(
         self,
@@ -174,18 +176,22 @@ class WorkspaceIntegrationService:
         base_url: str | None = None,
         token: str | None = None,
     ) -> dict:
+        resolved_provider = provider
         if workspace_id and not (base_url and token):
+            row = self.get_configured(workspace_id)
+            resolved_provider = str((row or {}).get("provider") or "tray")
             client = self.client_from_workspace(workspace_id)
         else:
-            self._provider(provider or "tray")
+            resolved_provider = self._provider(provider or "tray")
             if not base_url or not token:
                 raise HTTPException(status_code=400, detail="Informe adapterBaseUrl e adapterToken.")
-            client = TrayAdaptorClient(base_url, token)
+            client_type = MercosAdaptorClient if resolved_provider == "mercos" else TrayAdaptorClient
+            client = client_type(base_url, token)
         health = client.health()
         products = client.list_products(page=1, limit=1)
         return {
             "ok": True,
-            "provider": provider or str((self.get_configured(workspace_id or "") or {}).get("provider") or "tray"),
+            "provider": resolved_provider,
             "health": health,
             "sampleProducts": len(products),
         }
