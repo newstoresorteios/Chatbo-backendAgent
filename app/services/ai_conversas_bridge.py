@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.core.workspace_scope import stamp_workspace
@@ -33,6 +33,40 @@ RESPONSE_LIST_COLUMNS = (
 INBOX_PAGE_SIZE = 500
 INBOX_MAX_ROWS = 2500
 IN_QUERY_CHUNK = 80
+HUMAN_TAKEOVER_IDLE_MINUTES = 15
+
+
+def _timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (ValueError, TypeError):
+        return None
+
+
+def _expired_takeover_patch(
+    conversa: dict,
+    responses: list[dict],
+    *,
+    last_human_activity_at: Any,
+    idle_minutes: int = HUMAN_TAKEOVER_IDLE_MINUTES,
+) -> dict:
+    """Release an assigned conversation when the agent resumed after human idle."""
+    if conversa.get("status") == "closed" or not (
+        conversa.get("assigned_to") or conversa.get("bot_activated") is False
+    ):
+        return {}
+    human_at = _timestamp(last_human_activity_at)
+    response_times = [
+        stamped
+        for row in responses
+        if (stamped := _timestamp(row.get("created_at"))) is not None
+    ]
+    if human_at is None or not response_times:
+        return {}
+    if max(response_times) < human_at + timedelta(minutes=max(1, idle_minutes)):
+        return {}
+    return {"status": "active", "assigned_to": None, "bot_activated": True}
 
 
 def _new_customer_activity_patch(conversa: dict, inbounds: list[dict]) -> dict:
@@ -367,6 +401,32 @@ class AiConversasBridge:
                 conversa_id,
                 exc,
             )
+
+    def _expired_takeover_patch(self, conversa: dict, responses: list[dict]) -> dict:
+        keys = _identity_keys(conversa)
+        if not keys or not responses or not (
+            conversa.get("assigned_to") or conversa.get("bot_activated") is False
+        ):
+            return {}
+        try:
+            result = (
+                supabase.table("ai_human_takeover_state")
+                .select("last_human_activity_at")
+                .in_("state_key", keys)
+                .order("last_human_activity_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+        except Exception as exc:
+            logger.warning("Falha ao consultar expiração do takeover humano: %s", exc)
+            return {}
+        latest = rows[0].get("last_human_activity_at") if rows else None
+        return _expired_takeover_patch(
+            conversa,
+            responses,
+            last_human_activity_at=latest,
+        )
 
     def _ensure_conversa(
         self,
@@ -711,7 +771,8 @@ class AiConversasBridge:
         if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
             patch["bot_activated"] = True
         patch.update(_new_customer_activity_patch(conversa, inbounds))
-        patch.update(_confirmed_handoff_patch(conversa, responses))
+        patch.update(self._expired_takeover_patch(conversa, responses))
+        patch.update(_confirmed_handoff_patch({**conversa, **patch}, responses))
         updated = self.conversas.atualizar(
             conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
         )
@@ -774,7 +835,8 @@ class AiConversasBridge:
                 if sender_key:
                     patch["contact_phone"] = sender_key
                 patch.update(_new_customer_activity_patch(conversa, inbounds))
-                patch.update(_confirmed_handoff_patch(conversa, responses))
+                patch.update(self._expired_takeover_patch(conversa, responses))
+                patch.update(_confirmed_handoff_patch({**conversa, **patch}, responses))
                 self.conversas.atualizar(
                     conversa_id, patch, workspace_id=workspace_id, preserve_newer_preview=True,
                 )

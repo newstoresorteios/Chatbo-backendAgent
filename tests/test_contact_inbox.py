@@ -216,3 +216,64 @@ def test_confirmed_handoff_import_preserves_claims_closures_and_does_not_repeat(
     assert _confirmed_handoff_patch({**session,"handoff_requested_at":patch["handoff_requested_at"]},[response]) == {}
     for changed in ({"provider_send_ok":False}, {"handoff_required":False}, {"response_metadata":{}}, {"workspace_id":"other"}):
         assert _confirmed_handoff_patch(session,[{**response,**changed}]) == {}
+
+
+def test_agent_response_after_15_minutes_releases_stale_human_assignment():
+    from app.services.ai_conversas_bridge import _expired_takeover_patch
+
+    conversa = {
+        "status": "active",
+        "assigned_to": "operator",
+        "bot_activated": False,
+    }
+    response = {"created_at": "2026-09-28T18:48:45Z"}
+
+    assert _expired_takeover_patch(
+        conversa,
+        [response],
+        last_human_activity_at="2026-09-28T18:33:44Z",
+    ) == {"status": "active", "assigned_to": None, "bot_activated": True}
+    assert _expired_takeover_patch(
+        conversa,
+        [response],
+        last_human_activity_at="2026-09-28T18:40:00Z",
+    ) == {}
+
+
+def test_expired_assignment_can_immediately_become_confirmed_waiting_handoff():
+    from app.services.ai_conversas_bridge import (
+        _confirmed_handoff_patch,
+        _expired_takeover_patch,
+    )
+
+    conversa = {
+        "workspace_id": "w",
+        "channel": "whatsapp",
+        "status": "active",
+        "assigned_to": "old-operator",
+        "bot_activated": False,
+    }
+    response = {
+        "workspace_id": "w",
+        "channel": "whatsapp",
+        "created_at": "2026-09-28T18:48:45Z",
+        "provider_send_ok": True,
+        "handoff_required": True,
+        "response_metadata": {
+            "handoff": {
+                "required": True,
+                "confirmed": True,
+                "consent_reason": "customer_requested_human",
+            }
+        },
+    }
+    released = _expired_takeover_patch(
+        conversa,
+        [response],
+        last_human_activity_at="2026-09-28T18:30:00Z",
+    )
+    queued = _confirmed_handoff_patch({**conversa, **released}, [response])
+
+    assert queued["status"] == "waiting"
+    assert queued["bot_activated"] is False
+    assert queued["handoff_reason"] == "customer_requested_human"
