@@ -32,6 +32,20 @@ def test_attribute_orders_rejects_phone_only_match_without_commerce_evidence():
     assert attributed[0]["attributionReason"] is None
 
 
+def test_attribute_orders_keeps_mercos_as_external_source():
+    service = CommercialBiService()
+    attributed = service._attribute_orders(
+        [{"id": 25895, "customer_phone": "43999990000"}],
+        set(),
+        set(),
+        {},
+        {},
+        commerce_source="mercos",
+    )
+
+    assert attributed[0]["source"] == "mercos"
+
+
 def test_attribute_orders_accepts_verified_cart_session_for_same_contact():
     service = CommercialBiService()
     attributed = service._attribute_orders(

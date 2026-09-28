@@ -1,4 +1,4 @@
-"""Análise BI comercial: TRAYadaptor + Responses API → commercial_bi_snapshots."""
+"""Análise BI comercial: adaptor do workspace + Responses API → snapshots."""
 
 from __future__ import annotations
 
@@ -189,6 +189,7 @@ class CommercialBiService:
         chatbo_emails: set[str],
         chatbo_order_evidence: dict[str, set[str]],
         chatbo_session_evidence: dict[str, set[str]],
+        commerce_source: str = "tray",
     ) -> list[dict]:
         attributed: list[dict] = []
         for order in orders:
@@ -206,7 +207,7 @@ class CommercialBiService:
             evidence_phones.update(chatbo_session_evidence.get(session_id, set()))
             commerce_matched = bool(phone_key and phone_key in evidence_phones)
             matched = contact_matched and commerce_matched
-            source = "chatbo" if matched else "tray"
+            source = "chatbo" if matched else commerce_source
             attributed.append(
                 {
                     "id": order_id,
@@ -586,6 +587,8 @@ class CommercialBiService:
         snap_id = (created[0] if created else {}).get("id")
 
         try:
+            integration = workspace_integration_service.get_configured(workspace_id)
+            provider = str((integration or {}).get("provider") or "tray")
             client = workspace_integration_service.client_from_workspace(workspace_id)
             sample = client.collect_period(
                 period_days=period_days,
@@ -609,6 +612,7 @@ class CommercialBiService:
                 emails,
                 order_evidence,
                 session_evidence,
+                commerce_source=provider,
             )
             chatbo_orders = [order for order in attributed if order["source"] == "chatbo"]
             chatbo_orders = self._enrich_order_items(client, chatbo_orders)
@@ -638,6 +642,7 @@ class CommercialBiService:
             }
             insights = self._call_responses_insights(insight_context)
             source_meta = {
+                "provider": provider,
                 "period": sample.get("period"),
                 "attributedOrders": chatbo_count,
                 "scope": "chatbo_current_month",
@@ -655,7 +660,7 @@ class CommercialBiService:
             if snap_id:
                 supabase.table("commercial_bi_snapshots").update(update).eq("id", snap_id).execute()
             # marca sync da integração
-            integ = workspace_integration_service.get(workspace_id, "tray")
+            integ = integration
             if integ:
                 supabase.table("workspace_integrations").update(
                     {

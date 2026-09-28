@@ -46,6 +46,7 @@ class DataSourceRequest(BaseModel):
 
 
 class DataSourceTestRequest(BaseModel):
+    provider: str | None = None
     adapterBaseUrl: str | None = None
     adapterToken: str | None = None
 
@@ -122,7 +123,7 @@ def criar_admin_empresa(
 @router.get("/system/companies/{company_id}/data-source")
 def obter_data_source(company_id: str, _: dict = Depends(requer_system_admin)):
     system_companies_service.obter_empresa(company_id)
-    row = workspace_integration_service.get(company_id, "tray")
+    row = workspace_integration_service.get_configured(company_id)
     return workspace_integration_service.public_view(row)
 
 
@@ -133,10 +134,9 @@ def salvar_data_source(
     _: dict = Depends(requer_system_admin),
 ):
     system_companies_service.obter_empresa(company_id)
-    if body.provider != "tray":
-        raise HTTPException(status_code=400, detail="Somente provider=tray é suportado no MVP.")
-    row = workspace_integration_service.upsert_tray(
+    row = workspace_integration_service.upsert(
         company_id,
+        provider=body.provider,
         adapter_base_url=body.adapterBaseUrl,
         adapter_token=body.adapterToken,
         enabled=body.enabled,
@@ -154,6 +154,7 @@ def testar_data_source(
     try:
         if body and body.adapterBaseUrl and body.adapterToken:
             return workspace_integration_service.test_connection(
+                provider=body.provider,
                 base_url=body.adapterBaseUrl,
                 token=body.adapterToken,
             )
