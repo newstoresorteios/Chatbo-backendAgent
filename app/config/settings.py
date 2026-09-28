@@ -128,7 +128,6 @@ XNAMAI_AGENT_URL = (
     _clean_env(os.getenv("XNAMAI_AGENT_URL"))
     or "https://x-namai-agent.vercel.app"
 )
-XNAMAI_AGENT_TOKEN = _clean_env(os.getenv("XNAMAI_AGENT_TOKEN")) or ""
 
 # Brevo — mesmo canal do NSAgentForSorteios (Central de Conversão → cliente)
 BREVO_API_KEY = _clean_env(os.getenv("BREVO_API_KEY")) or ""

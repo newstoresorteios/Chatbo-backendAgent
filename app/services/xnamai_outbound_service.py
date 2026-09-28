@@ -3,7 +3,6 @@ import logging
 import requests
 
 from app.config.settings import (
-    XNAMAI_AGENT_TOKEN,
     XNAMAI_AGENT_URL,
     XNAMAI_WORKSPACE_ID,
 )
@@ -17,7 +16,7 @@ class XNamaiOutboundService:
         return bool(workspace_id) and str(workspace_id) == XNAMAI_WORKSPACE_ID
 
     def configurado(self) -> bool:
-        return bool(XNAMAI_AGENT_URL and XNAMAI_AGENT_TOKEN)
+        return bool(XNAMAI_AGENT_URL)
 
     def enviar_para_conversa(
         self,
@@ -29,10 +28,7 @@ class XNamaiOutboundService:
         if not self.configurado():
             return {
                 "sent": False,
-                "reason": (
-                    "Canal YCloud da XNamai não configurado no backend: "
-                    "defina XNAMAI_AGENT_TOKEN no Render."
-                ),
+                "reason": "URL do runtime YCloud da XNamai não configurada",
             }
 
         recipient = str(conversa.get("contact_phone") or "").strip()
@@ -40,20 +36,14 @@ class XNamaiOutboundService:
             return {"sent": False, "reason": "Telefone do contato XNamai ausente"}
 
         url = f"{XNAMAI_AGENT_URL.rstrip('/')}/api/internal/chatbo/outbound"
-        payload = {
-            "workspaceId": XNAMAI_WORKSPACE_ID,
-            "recipient": recipient,
-            "content": content,
-            "correlationId": correlation_id,
-        }
+        if not correlation_id:
+            return {"sent": False, "reason": "ID da mensagem de saída ausente"}
+        payload = {"messageId": correlation_id}
         try:
             response = requests.post(
                 url,
                 json=payload,
-                headers={
-                    "Authorization": f"Bearer {XNAMAI_AGENT_TOKEN}",
-                    "Accept": "application/json",
-                },
+                headers={"Accept": "application/json"},
                 timeout=25,
             )
         except requests.RequestException as exc:

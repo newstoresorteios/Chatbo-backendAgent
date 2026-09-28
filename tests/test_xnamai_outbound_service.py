@@ -16,10 +16,7 @@ def test_xnamai_outbound_calls_dedicated_runtime_without_brevo():
     response.ok = True
     response.status_code = 200
     response.json.return_value = {"ok": True, "provider": "ycloud", "wamid": "wamid.1"}
-    with (
-        patch("app.services.xnamai_outbound_service.XNAMAI_AGENT_TOKEN", "shared-token"),
-        patch("app.services.xnamai_outbound_service.requests.post", return_value=response) as post,
-    ):
+    with patch("app.services.xnamai_outbound_service.requests.post", return_value=response) as post:
         result = XNamaiOutboundService().enviar_para_conversa(
             {"contact_phone": "whatsapp:558599498149"},
             "Ricardo: oi",
@@ -27,8 +24,8 @@ def test_xnamai_outbound_calls_dedicated_runtime_without_brevo():
         )
     assert result == {"sent": True, "provider": "ycloud", "providerMessageId": "wamid.1"}
     assert post.call_args.args[0].endswith("/api/internal/chatbo/outbound")
-    assert post.call_args.kwargs["json"]["workspaceId"] == "aa774d20-509f-4d54-865b-7a5de22b6d30"
-    assert post.call_args.kwargs["json"]["recipient"] == "whatsapp:558599498149"
+    assert post.call_args.kwargs["json"] == {"messageId": "message-1"}
+    assert "Authorization" not in post.call_args.kwargs["headers"]
 
 
 def test_conversation_service_routes_xnamai_to_ycloud_and_not_brevo():
