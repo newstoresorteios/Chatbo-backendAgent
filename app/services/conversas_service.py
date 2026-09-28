@@ -478,10 +478,19 @@ class ConversasService:
             from app.services.brevo_outbound_service import brevo_outbound_service
             from app.services.meta_instagram_outbound import enviar_para_conversa as enviar_meta
             from app.services.meta_instagram_outbound import is_meta_instagram
+            from app.services.xnamai_outbound_service import xnamai_outbound_service
 
             inbound = brevo_outbound_service._lookup_inbound(conversa) or {}
             if is_meta_instagram(conversa, inbound):
                 delivery = enviar_meta(conversa, outbound_text, inbound)
+            elif xnamai_outbound_service.is_workspace(conversa.get("workspace_id") or workspace_id):
+                # Separação estrita: WhatsApp XNamai sempre sai pelo runtime
+                # YCloud. Nunca fazemos fallback para a Brevo da NS.
+                delivery = xnamai_outbound_service.enviar_para_conversa(
+                    conversa,
+                    outbound_text,
+                    correlation_id=str(mensagem.get("id") or "") or None,
+                )
             elif not brevo_outbound_service.configurado():
                 delivery = {
                     "sent": False,

@@ -22,6 +22,12 @@ services:
         value: https://www.chatbo.com.br,https://chatbo.com.br
       - key: ETL_CRON_SECRET
         sync: false
+      - key: XNAMAI_AGENT_URL
+        value: https://x-namai-agent.vercel.app
+      - key: XNAMAI_WORKSPACE_ID
+        value: aa774d20-509f-4d54-865b-7a5de22b6d30
+      - key: XNAMAI_AGENT_TOKEN
+        sync: false
 
   # ETL pedidos — a cada 30 min. Configure no Render:
   # ETL_BASE_URL=https://SEU-BACKEND.onrender.com/api/etl/run

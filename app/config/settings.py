@@ -118,6 +118,18 @@ META_API_VERSION = os.getenv("META_API_VERSION", "v21.0")
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:8000")
 NITRUS_INTERNAL_API_TOKEN = os.getenv("NITRUS_INTERNAL_API_TOKEN")
 
+# Roteamento multiempresa de WhatsApp. A XNamai usa YCloud por meio do seu
+# runtime dedicado; a NS continua usando Brevo neste backend.
+XNAMAI_WORKSPACE_ID = (
+    _clean_env(os.getenv("XNAMAI_WORKSPACE_ID"))
+    or "aa774d20-509f-4d54-865b-7a5de22b6d30"
+)
+XNAMAI_AGENT_URL = (
+    _clean_env(os.getenv("XNAMAI_AGENT_URL"))
+    or "https://x-namai-agent.vercel.app"
+)
+XNAMAI_AGENT_TOKEN = _clean_env(os.getenv("XNAMAI_AGENT_TOKEN")) or ""
+
 # Brevo — mesmo canal do NSAgentForSorteios (Central de Conversão → cliente)
 BREVO_API_KEY = _clean_env(os.getenv("BREVO_API_KEY")) or ""
 BREVO_AGENT_ID = _clean_env(os.getenv("BREVO_AGENT_ID")) or ""
