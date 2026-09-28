@@ -7,6 +7,8 @@ from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.agent_registry_service import agent_registry_service
 from app.services.persona_runtime_service import persona_runtime_service
+from app.schemas.agent_conversation_ingest import AgentConversationTurn
+from app.services.agent_conversation_ingest_service import agent_conversation_ingest_service
 
 
 router = APIRouter()
@@ -39,6 +41,15 @@ def obter_agente_workspace(workspace_id: str) -> dict:
 def obter_agente_empresa(company_id: str) -> dict:
     """Alias: company_id == workspace_id."""
     return agent_registry_service.obter_runtime_interno(company_id)
+
+
+@router.post(
+    "/internal/workspaces/{workspace_id}/conversation-turns",
+    dependencies=[Depends(require_nitrus_internal_token)],
+)
+def registrar_turno_agente(workspace_id: str, body: AgentConversationTurn) -> dict:
+    """Persist a provider turn under the server-selected company workspace."""
+    return agent_conversation_ingest_service.ingest_turn(workspace_id, body)
 
 
 @router.get(
