@@ -64,8 +64,10 @@ def test_closing_all_open_sessions_does_not_rewrite_or_delete_history():
     with patch('app.services.contact_inbox_service.invalidate_conversa'):
         svc.atuar('old', 'ws', 'encerrar', actor_name='User')
     patch_data = svc.repo.atualizar_abertas.call_args.args[2]
-    assert set(patch_data) == {'status', 'updated_at'}
+    assert set(patch_data) == {'status', 'assigned_to', 'bot_activated', 'updated_at'}
     assert patch_data['status'] == 'closed'
+    assert patch_data['assigned_to'] is None
+    assert patch_data['bot_activated'] is True
     svc.repo.mensagens.assert_not_called()
 
 

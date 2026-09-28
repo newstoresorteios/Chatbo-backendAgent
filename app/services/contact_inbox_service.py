@@ -136,7 +136,7 @@ class ContactInboxService:
                          department=PERFIL_DEPARTAMENTO.get(assignee["role"], "Atendimento"))
             event = f"[Sistema] {actor_name} {'iniciou o atendimento' if action == 'assumir' else 'transferiu o atendimento para ' + assignee['name']}. O agente automático foi pausado."
         elif action == "encerrar":
-            patch["status"] = "closed"
+            patch.update(status="closed", assigned_to=None, bot_activated=True)
             event = f"[Sistema] Atendimento encerrado por {actor_name}." + (f" Motivo: {note.strip()}" if note else "")
         else:
             raise ValueError("Ação de contato inválida")

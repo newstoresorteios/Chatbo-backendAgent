@@ -758,7 +758,13 @@ class ConversasService:
         self._obter_conversa(conversa_id, workspace_id=workspace_id)
         row = self.conversas.atualizar(
             conversa_id,
-            {"status": "closed"},
+            {
+                "status": "closed",
+                # Encerrar devolve a identidade ao agente. Uma nova mensagem
+                # do cliente pode então reabrir a sessão sem herdar o takeover.
+                "assigned_to": None,
+                "bot_activated": True,
+            },
             workspace_id=workspace_id,
         )
         detail = f" Motivo: {note.strip()}" if note and note.strip() else ""
