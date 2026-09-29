@@ -198,6 +198,21 @@ def test_queue_requires_confirmed_handoff_independently_of_waiting_status():
     assert _map_conversa({**confirmed, "handoff_reason": "integration_failure"})["status"] == "active"
 
 
+def test_map_instagram_conversation_exposes_profile_link():
+    from app.services.conversas_service import _map_conversa
+
+    mapped = _map_conversa({
+        "id": "session",
+        "channel": "instagram",
+        "customer_name": "amel_.brown",
+        "customer_avatar": "https://cdn.example/avatar.jpg",
+    })
+
+    assert mapped["profileUsername"] == "amel_.brown"
+    assert mapped["profileUrl"] == "https://www.instagram.com/amel_.brown/"
+    assert mapped["customerAvatar"] == "https://cdn.example/avatar.jpg"
+
+
 def test_confirmed_handoff_import_preserves_claims_closures_and_does_not_repeat():
     from app.services.ai_conversas_bridge import _confirmed_handoff_patch
     session = {"workspace_id":"w", "channel":"whatsapp", "status":"active"}

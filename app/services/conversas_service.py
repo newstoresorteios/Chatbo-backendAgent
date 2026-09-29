@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import threading
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -27,11 +28,20 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
     status = row.get("status") or "active"
     if status == "waiting" and not handoff_requested:
         status = "active"
+    channel = str(row.get("channel") or "whatsapp").lower()
+    profile_username = None
+    profile_url = None
+    if channel == "instagram":
+        profile_username = str(row.get("customer_name") or "").strip().lstrip("@") or None
+        if profile_username:
+            profile_url = f"https://www.instagram.com/{quote(profile_username, safe='._')}/"
     return {
         "id": str(row.get("id")),
         "customerId": str(row.get("cliente_mercos_id") or ""),
         "customerName": row.get("customer_name") or "Cliente",
         "customerAvatar": row.get("customer_avatar"),
+        "profileUsername": profile_username,
+        "profileUrl": profile_url,
         "lastMessage": row.get("last_message") or "",
         "lastMessageAt": row.get("last_message_at") or row.get("created_at") or datetime.utcnow().isoformat(),
         "status": status,
@@ -39,7 +49,7 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
         "handoffRequestedAt": row.get("handoff_requested_at"),
         "handoffReason": row.get("handoff_reason"),
         "unreadCount": int(row.get("unread_count") or 0),
-        "channel": row.get("channel") or "whatsapp",
+        "channel": channel,
         "department": row.get("department"),
         "protocol": row.get("protocol"),
         "assignedTo": str(assigned_id) if assigned_id else None,

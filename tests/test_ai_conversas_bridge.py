@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from app.services.ai_conversas_bridge import (
     _channel,
+    _customer_avatar,
     _customer_display_name,
     _is_duplicate_external_id_error,
     _thread_key,
@@ -92,6 +93,15 @@ def test_display_name_prefers_instagram_username_over_contato():
         key="ig:12345664",
         existing="Contato 6664",
     ) == "tironi_oficial"
+
+
+def test_customer_avatar_reads_meta_profile_picture():
+    assert _customer_avatar({
+        "channel_metadata": {"profile_picture_url": "https://cdn.example/avatar.jpg"},
+    }) == "https://cdn.example/avatar.jpg"
+    assert _customer_avatar({
+        "channel_metadata": {"profile_picture_url": "javascript:alert(1)"},
+    }) is None
 
 
 def test_display_name_keeps_good_existing_name():

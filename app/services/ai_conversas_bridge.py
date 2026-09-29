@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 INBOUND_LIST_COLUMNS = (
     "id,created_at,conversation_id,sender_key,sender_phone,visitor_id,"
-    "sender_name,sender_username,channel,text,channel_metadata,workspace_id"
+    "sender_name,sender_username,source_channel_link,channel,text,channel_metadata,workspace_id"
 )
 RESPONSE_LIST_COLUMNS = (
     "id,created_at,sender_key,sender_phone,reply_text,channel,inbound_id,workspace_id,"
@@ -153,6 +153,17 @@ def _customer_display_name(sample: dict, *, key: str = "", existing: str | None 
         return phone
     suffix = key[-4:] if len(str(key)) >= 4 else (key or "0000")
     return f"Contato {suffix}"
+
+
+def _customer_avatar(sample: dict) -> str | None:
+    metadata = sample.get("channel_metadata")
+    if not isinstance(metadata, dict):
+        return None
+    for key in ("profile_picture_url", "profile_pic", "avatar_url"):
+        value = str(metadata.get(key) or "").strip()
+        if value.startswith(("https://", "http://")):
+            return value
+    return None
 
 
 def _channel(row: dict) -> str:
@@ -458,6 +469,7 @@ class AiConversasBridge:
         channel = _channel(sample)
         last_text = sample.get("text") or sample.get("reply_text") or ""
         last_at = sample.get("created_at") or datetime.utcnow().isoformat()
+        customer_avatar = _customer_avatar(sample)
 
         if existing:
             old_thread = str(existing.get("external_thread_id") or "").strip()
@@ -485,6 +497,8 @@ class AiConversasBridge:
                 patch["contact_phone"] = sender_key
             if name and name != existing.get("customer_name"):
                 patch["customer_name"] = name
+            if customer_avatar and customer_avatar != existing.get("customer_avatar"):
+                patch["customer_avatar"] = customer_avatar
             if patch:
                 updated = self.conversas.atualizar(
                     str(existing["id"]),
@@ -502,6 +516,7 @@ class AiConversasBridge:
                 "external_thread_id": conversation_id,
                 "contact_phone": sender_key,
                 "customer_name": name,
+                "customer_avatar": customer_avatar,
                 "channel": channel,
                 "status": "active",
                 "unread_count": 0,
@@ -762,6 +777,8 @@ class AiConversasBridge:
             "channel": _channel(sample),
             "status": conversa.get("status") or "active",
         }
+        if avatar := _customer_avatar(sample):
+            patch["customer_avatar"] = avatar
         conv_id = str(sample.get("conversation_id") or "").strip()
         sender_key = str(sample.get("sender_key") or sample.get("sender_phone") or "").strip()
         if conv_id:
@@ -826,6 +843,8 @@ class AiConversasBridge:
                     "last_message_at": last_at,
                     "channel": _channel(sample),
                 }
+                if avatar := _customer_avatar(sample):
+                    patch["customer_avatar"] = avatar
                 if not conversa.get("assigned_to") and conversa.get("bot_activated") is not False:
                     patch["bot_activated"] = True
                 conv_id = str(sample.get("conversation_id") or "").strip()
