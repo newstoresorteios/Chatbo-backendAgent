@@ -16,7 +16,49 @@ def test_jota_existing_message_receives_story_image_with_caption_preserved():
     assert result[0]["mediaType"] == "image"
     assert result[0]["content"] == "Qual valor?"
     assert "mediaUrl" not in original
+
+
+def test_acknowledged_outbound_photo_is_shown_in_workspace_scoped_central():
+    client = MagicMock()
+    query = client.table.return_value.select.return_value.eq.return_value.eq.return_value.in_.return_value
+    photo = "https://images.tcdn.com.br/img/product.jpg"
+    query.execute.return_value.data = [{"id": 1023, "provider_response": {"media_messages": [
+        {"type": "image", "url": photo, "message_id": "meta-ack"}]}}]
+    message = {"id": "central-id", "externalId": "ai-out-1023", "content": "Uma possibilidade"}
+    with patch("app.services.ai_conversation_media.supabase", client):
+        result = enrich_ai_message_media([message], "workspace-a")
+    assert result[0]["mediaUrl"] == photo
+    assert result[0]["content"] == message["content"]
     client.table.return_value.select.return_value.eq.assert_called_once_with("workspace_id", "workspace-a")
+    client.table.return_value.select.return_value.eq.return_value.eq.assert_called_once_with("provider_send_ok", True)
+
+
+def test_unsent_or_untrusted_outbound_photo_is_not_shown():
+    client = MagicMock()
+    query = client.table.return_value.select.return_value.eq.return_value.eq.return_value.in_.return_value
+    query.execute.return_value.data = [{"id": 1023, "provider_response": {"media_messages": [
+        {"type": "image", "url": "https://images.tcdn.com.br/unsent.jpg"},
+        {"type": "image", "url": "https://tcdn.com.br.evil.test/a.jpg", "message_id": "id"}]}}]
+    message = {"id": "central-id", "externalId": "ai-out-1023", "content": "Uma possibilidade"}
+    with patch("app.services.ai_conversation_media.supabase", client):
+        assert enrich_ai_message_media([message], "workspace-a") == [message]
+    client.table.return_value.select.return_value.eq.assert_called_once_with("workspace_id", "workspace-a")
+
+
+def test_multiple_sent_photos_keep_unique_ids_and_do_not_repeat_text_or_photos():
+    client = MagicMock()
+    query = client.table.return_value.select.return_value.eq.return_value.eq.return_value.in_.return_value
+    photos = [f"https://images.tcdn.com.br/{index}.jpg" for index in range(3)]
+    query.execute.return_value.data = [{"id": 1023, "provider_response": {"media_messages": [
+        {"type": "image", "url": url, "message_id": f"ack-{index}"} for index, url in enumerate(photos)]}}]
+    original = {"id": "central-id", "externalId": "ai-out-1023", "content": "Três opções"}
+    with patch("app.services.ai_conversation_media.supabase", client):
+        result = enrich_ai_message_media([original], "workspace-a")
+        assert enrich_ai_message_media(result, "workspace-a") == result
+    assert [message["mediaUrl"] for message in result] == photos
+    assert len({message["id"] for message in result}) == 3
+    assert [message["content"] for message in result] == [original["content"], "", ""]
+    assert "mediaUrl" not in original
 
 
 def test_no_workspace_no_lookup_and_no_replacement_of_stored_media():
