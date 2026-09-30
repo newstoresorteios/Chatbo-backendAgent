@@ -20,13 +20,23 @@ def intent_stage(text):
     text = ''.join(c for c in unicodedata.normalize('NFKD', text.lower()) if not unicodedata.combining(c))
     if re.search(r'nao (quero|vou) (comprar|fechar)|nao tenho interesse|desisti da compra', text):
         return 'lost'
-    if re.search(r'meu pedido|rastre|despach|ja (comprei|paguei)|status.*pedido|pedido.*(cheg|envi)|garantia|assistencia|devolu|troca', text):
+    if re.search(r'meu pedido|rastre|despach|ja (comprei|paguei)|status.*pedido|pedido.*(cheg|envi)', text):
         return 'post_sale'
     if re.search(r'pronta[ -]+entrega|quero (comprar|fechar|pagar)|vou (comprar|levar)|como (compro|pago)|link.*pagamento|manda.*pix|pode reservar', text):
         return 'high_intent'
-    if re.search(r'preco|valor|orcamento|disponiv|estoque|quanto|parcela|frete|comprar', text):
+    if re.search(r'assistencia|devolu|(?:acionar|usar|solicitar).*garantia|(?:quero|preciso|solicitar).*(?:trocar|troca)', text):
+        return 'post_sale'
+    if re.search(r'preco|valor|orcamento|disponiv|estoque|quanto|parcela|frete|comprar|garantia|politica.*troca', text):
         return 'interest'
     return None
+
+
+def _timestamp(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (AttributeError, ValueError, TypeError):
+        return None
 
 
 def project_lead(group, messages, *, now=None):
@@ -39,8 +49,14 @@ def project_lead(group, messages, *, now=None):
             continue
         observed = intent_stage(str(message.get('content') or ''))
         if observed:
-            # A price follow-up does not erase an explicit purchase decision.
-            if not (stage == 'high_intent' and observed == 'interest'):
+            # Preserve a fresh purchase decision, but never let an expired one
+            # suppress renewed customer interest. Bot messages cannot reheat it.
+            previous_at = _timestamp((evidence or {}).get('created_at'))
+            current_at = _timestamp(message.get('created_at'))
+            fresh_purchase = (stage == 'high_intent' and observed == 'interest'
+                              and previous_at is not None and current_at is not None
+                              and 0 <= (current_at - previous_at).total_seconds() < 86400)
+            if not fresh_purchase:
                 stage = observed
                 evidence = message
             history.add(observed)

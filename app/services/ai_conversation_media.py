@@ -25,10 +25,25 @@ def _media_url(value) -> str | None:
     return None
 
 
-def inbound_media_fields(row: dict) -> dict:
+def inbound_media_fields(row: dict, workspace_id: str | None = None) -> dict:
     meta = row.get("channel_metadata") or {}
     if not isinstance(meta, dict):
         return {}
+    stored = meta.get('media_storage_path')
+    if workspace_id and isinstance(stored, str):
+        # Only sign paths owned by this authorized inbound's workspace, never a
+        # caller-provided arbitrary bucket/object or a different tenant's path.
+        prefix = f'supabase://conversation-media/private/instagram-stories/{workspace_id}/'
+        if stored.startswith(prefix) and re.fullmatch(r'[a-f0-9]{48}', stored[len(prefix):]):
+            try:
+                path = stored.removeprefix('supabase://conversation-media/')
+                result = supabase.storage.from_('conversation-media').create_signed_url(path, 900)
+                signed = result.get('signedURL') or result.get('signedUrl')
+                mime = str(meta.get('media_content_type') or '')
+                if signed and mime.startswith(('image/', 'video/')):
+                    return {'mediaUrl': signed, 'mediaType': mime.split('/', 1)[0], 'mediaContentType': mime}
+            except Exception as exc:
+                logger.warning('Archived AI media unavailable (%s)', type(exc).__name__)
     url = _media_url(meta.get("image_url"))
     kind = str(meta.get("attachment_type") or "").lower()
     if not url:
@@ -57,7 +72,7 @@ def enrich_ai_message_media(messages: list[dict], workspace_id: str | None) -> l
                     "id,channel_metadata,story_id:raw->meta_event->message->reply_to->story->>id,"
                     "account_id:raw->meta_event->recipient->>id")
                 .eq("workspace_id", workspace_id).in_("id", list(ids)).execute().data or [])
-        media = {f"ai-in-{row['id']}": inbound_media_fields(row) for row in rows}
+        media = {f"ai-in-{row['id']}": inbound_media_fields(row, workspace_id) for row in rows}
         # The receiver's account and story IDs came from workspace-scoped inbound
         # rows. The downloaded MIME fixes old opaque URLs mislabeled as images.
         story_rows = [row for row in rows if row.get("story_id") and row.get("account_id")]
@@ -72,6 +87,8 @@ def enrich_ai_message_media(messages: list[dict], workspace_id: str | None) -> l
                 mimes = {(row["instagram_account_id"], row["story_media_id"]): row.get("media_mime")
                          for row in stories}
                 for row in story_rows:
+                    if media[f"ai-in-{row['id']}"].get('mediaContentType'):
+                        continue  # The actual archived bytes take precedence.
                     mime = mimes.get((row["account_id"], row["story_id"])) or ""
                     if mime.startswith(("video/", "image/")):
                         media[f"ai-in-{row['id']}"].update(mediaType=mime.split("/", 1)[0], mediaContentType=mime)

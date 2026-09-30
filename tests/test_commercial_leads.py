@@ -19,6 +19,12 @@ def message(text, sender='customer', index=1):
     ('Despachou amigão?', 'post_sale'), ('Meu pedido 26116', 'post_sale'),
     ('Qual valor?', 'interest'), ('Obrigado!', None), ('Quero comprar', 'high_intent'),
     ('Não quero comprar', 'lost'),
+    ('Quero comprar esse relógio. Qual a garantia?', 'high_intent'),
+    ('Quero comprar. Qual a política de troca?', 'high_intent'),
+    ('Quero comprar esse relógio. Tem assistência?', 'high_intent'),
+    ('Qual a garantia e a política de troca?', 'interest'),
+    ('Quero acionar a garantia do meu relógio', 'post_sale'),
+    ('Já comprei e preciso de assistência', 'post_sale'),
 ])
 def test_intent(text, stage):
     assert intent_stage(text) == stage
@@ -73,6 +79,29 @@ def test_hot_lead_expires_after_one_day(hours, stage, label):
     result = project_lead(group(), [msg, message('Vamos fechar?', sender='ai')], now=now)
     assert (result['stage'], result['label']) == (stage, label)
     assert 'high_intent' in result['observedStages']
+
+
+@pytest.mark.parametrize('hours', [24, 168, 192])
+def test_recent_price_question_renews_expired_interest(hours):
+    now = datetime.now(timezone.utc)
+    old = message('Quero comprar')
+    old['created_at'] = (now - timedelta(hours=hours)).isoformat()
+    fresh = message('Qual o valor atualizado?', index=2)
+    fresh['created_at'] = now.isoformat()
+    result = project_lead(group(), [old, fresh], now=now)
+    assert (result['stage'], result['score']) == ('interest', 65)
+    assert result['evidence'] == fresh['content']
+    assert result['intentAgeHours'] == 0
+    assert 'high_intent' in result['observedStages']
+
+
+def test_price_followup_does_not_extend_hot_purchase_deadline():
+    now = datetime.now(timezone.utc)
+    old = message('Quero comprar')
+    old['created_at'] = (now - timedelta(hours=25)).isoformat()
+    followup = message('Qual o valor?', index=2)
+    followup['created_at'] = (now - timedelta(hours=2)).isoformat()
+    assert project_lead(group(), [old, followup], now=now)['stage'] == 'follow_up'
 
 
 def test_empty_workspace_page_scoped_and_paginated():

@@ -39,6 +39,37 @@ def test_video_metadata_for_player():
     assert result["mediaType"] == "video"
 
 
+def test_private_archive_replaces_expired_meta_url_with_fresh_signed_video():
+    metadata = {'image_url': 'https://lookaside.fbsbx.com/expired',
+                'attachment_type': 'image', 'media_content_type': 'video/mp4',
+                'media_storage_path': 'supabase://conversation-media/private/instagram-stories/workspace-a/' + 'a' * 48}
+    with patch('app.services.ai_conversation_media.supabase') as db:
+        db.storage.from_.return_value.create_signed_url.return_value = {'signedURL': 'https://storage/signed-new'}
+        result = inbound_media_fields({'channel_metadata': metadata}, 'workspace-a')
+        db.storage.from_.assert_called_once_with('conversation-media')
+        db.storage.from_.return_value.create_signed_url.assert_called_once_with(
+            'private/instagram-stories/workspace-a/' + 'a' * 48, 900)
+    assert result == {'mediaUrl': 'https://storage/signed-new', 'mediaType': 'video', 'mediaContentType': 'video/mp4'}
+
+
+def test_foreign_workspace_and_arbitrary_storage_paths_are_never_signed():
+    for path in ['supabase://conversation-media/private/instagram-stories/other/' + 'a' * 48,
+                 'supabase://persona-knowledge/private/instagram-stories/workspace-a/' + 'a' * 48,
+                 'supabase://conversation-media/private/instagram-stories/workspace-a/../../secret']:
+        with patch('app.services.ai_conversation_media.supabase') as db:
+            assert not inbound_media_fields({'channel_metadata': {'media_storage_path': path}}, 'workspace-a')
+            db.storage.from_.assert_not_called()
+
+
+def test_storage_outage_falls_back_to_original_media():
+    metadata = {'image_url': 'https://lookaside.fbsbx.com/still-valid', 'attachment_type': 'image',
+                'media_storage_path': 'supabase://conversation-media/private/instagram-stories/workspace-a/' + 'a' * 48}
+    with patch('app.services.ai_conversation_media.supabase') as db:
+        db.storage.from_.return_value.create_signed_url.side_effect = RuntimeError('unavailable')
+        result = inbound_media_fields({'channel_metadata': metadata}, 'workspace-a')
+    assert result['mediaUrl'] == metadata['image_url']
+
+
 def test_jota_opaque_video_uses_downloaded_mime_scoped_to_receiving_account():
     client = MagicMock()
     inbound = MagicMock()
