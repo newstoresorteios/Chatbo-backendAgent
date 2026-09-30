@@ -98,6 +98,24 @@ def get_mensagens(
     )
 
 
+@router.get("/conversas/{conversation_id}/contato")
+def get_contact(conversation_id: str, context: dict = Depends(obter_company_context)):
+    group = contact_inbox.obter(conversation_id, workspace_id_from_context(context))
+    return map_contact(group, conversas_service._users_index())
+
+
+@router.get("/commercial/leads")
+def get_commercial_leads(
+    page: int = Query(default=1, ge=1, le=10000),
+    page_size: int = Query(default=100, ge=1, le=100),
+    context: dict = Depends(obter_company_context),
+):
+    from fastapi.responses import JSONResponse
+    from app.services.commercial_leads import list_commercial_leads
+    return JSONResponse(list_commercial_leads(workspace_id_from_context(context), page, page_size),
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.patch("/conversas/{conversation_id}/lida")
 def marcar_conversa_lida(
     conversation_id: str,
