@@ -46,13 +46,19 @@ def inbound_media_fields(row: dict, workspace_id: str | None = None) -> dict:
                 logger.warning('Archived AI media unavailable (%s)', type(exc).__name__)
     url = _media_url(meta.get("image_url"))
     kind = str(meta.get("attachment_type") or "").lower()
+    mime = str(meta.get("media_content_type") or "")
+    if mime.startswith(("image/", "video/")):
+        kind = mime.split("/", 1)[0]
     if not url:
         return {"mediaType": kind} if meta.get("image_url_present") and kind in {"image", "video"} else {}
     if kind not in {"image", "video"}:
         kind = "image"
     if urlsplit(url).path.lower().endswith((".mp4", ".mov", ".m4v")):
         kind = "video"
-    return {"mediaType": kind, "mediaUrl": url}
+    fields = {"mediaType": kind, "mediaUrl": url}
+    if mime.startswith(("image/", "video/")):
+        fields["mediaContentType"] = mime
+    return fields
 
 
 def enrich_ai_message_media(messages: list[dict], workspace_id: str | None) -> list[dict]:

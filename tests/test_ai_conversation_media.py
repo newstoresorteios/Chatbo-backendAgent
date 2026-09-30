@@ -81,6 +81,16 @@ def test_video_metadata_for_player():
     assert result["mediaType"] == "video"
 
 
+def test_sniffed_video_mime_survives_private_storage_failure():
+    result = inbound_media_fields({'channel_metadata': {
+        'image_url': 'https://lookaside.fbsbx.com/opaque?signature=secret',
+        'attachment_type': 'image', 'media_content_type': 'video/mp4',
+        'media_archive_error': 'storage_upload_http_403'}})
+    assert result['mediaType'] == 'video'
+    assert result['mediaContentType'] == 'video/mp4'
+    assert result['mediaUrl'].startswith('https://lookaside.fbsbx.com/')
+
+
 def test_private_archive_replaces_expired_meta_url_with_fresh_signed_video():
     metadata = {'image_url': 'https://lookaside.fbsbx.com/expired',
                 'attachment_type': 'image', 'media_content_type': 'video/mp4',
