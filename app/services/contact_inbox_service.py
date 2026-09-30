@@ -123,7 +123,8 @@ class ContactInboxService:
         # segundo plano e o polling ao vivo recebe as novas mensagens em seguida.
         if sync_throttle.should_run(f"contact-refresh:{workspace_id}:{group['id']}", 5):
             _kick_contact_sync(group, workspace_id)
-        return [_map_mensagem(row) for row in rows]
+        from app.services.ai_conversation_media import enrich_ai_message_media
+        return enrich_ai_message_media([_map_mensagem(row) for row in rows], workspace_id)
 
     def atuar(self, conversation_id: str, workspace_id: str, action: str, *,
               actor_name: str, assignee_id: str | None = None, note: str | None = None) -> dict:

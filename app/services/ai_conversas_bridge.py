@@ -662,6 +662,7 @@ class AiConversasBridge:
 
     def transcript_for_conversa(self, conversa: dict) -> list[dict]:
         """Monta histórico direto das tabelas do NSAgent (fallback de exibição)."""
+        from app.services.ai_conversation_media import inbound_media_fields
         inbounds, responses = self._load_thread_rows(conversa)
         conversa_id = str(conversa.get("id") or "")
         events: list[tuple[str, dict]] = []
@@ -684,6 +685,7 @@ class AiConversasBridge:
                         "sender": "customer",
                         "timestamp": row.get("created_at") or datetime.utcnow().isoformat(),
                         "status": "delivered",
+                        **inbound_media_fields(row),
                     },
                 )
             )

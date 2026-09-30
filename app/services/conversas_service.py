@@ -398,6 +398,8 @@ class ConversasService:
             after=after,
         )
         mapped = [_map_mensagem(row) for row in rows]
+        from app.services.ai_conversation_media import enrich_ai_message_media
+        mapped = enrich_ai_message_media(mapped, workspace_id or conversa.get("workspace_id"))
 
         # Transcript só como fallback se a tabela mensagens ainda estiver vazia.
         if not mapped and not after:
