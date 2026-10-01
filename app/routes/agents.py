@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import obter_usuario_atual
-from app.schemas.agent_registry import AgentConfigurationPublish, WorkspaceAgentUpdate
+from app.schemas.agent_registry import AgentConfigurationPublish, StoryReferenceCreate, StoryReferenceUpdate, WorkspaceAgentUpdate
 from app.services.agent_registry_service import agent_registry_service
 from app.services.agent_trace_service import agent_trace_service
+from app.services.story_reference_service import story_reference_service
 
 router = APIRouter()
 
@@ -74,3 +75,26 @@ def obter_execucao_agente(
     usuario: dict = Depends(obter_usuario_atual),
 ):
     return agent_trace_service.obter(usuario, response_id)
+
+
+@router.get("/agents/current/story-references")
+def listar_referencias_stories(include_inactive: bool = Query(default=True), usuario: dict = Depends(obter_usuario_atual)):
+    return story_reference_service.list(usuario, include_inactive=include_inactive)
+
+
+@router.post("/agents/current/story-references", status_code=201)
+def criar_referencia_story(body: StoryReferenceCreate, usuario: dict = Depends(obter_usuario_atual)):
+    return story_reference_service.create(usuario, **body.model_dump())
+
+
+@router.patch("/agents/current/story-references/{reference_id}")
+def atualizar_referencia_story(reference_id: int, body: StoryReferenceUpdate, usuario: dict = Depends(obter_usuario_atual)):
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Informe ao menos um campo para alterar")
+    return story_reference_service.update(usuario, reference_id, changes)
+
+
+@router.delete("/agents/current/story-references/{reference_id}", status_code=204)
+def excluir_referencia_story(reference_id: int, usuario: dict = Depends(obter_usuario_atual)):
+    story_reference_service.delete(usuario, reference_id)

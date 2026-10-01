@@ -32,3 +32,16 @@ class WorkspaceAgentUpdate(BaseModel):
 class AgentConfigurationPublish(BaseModel):
     expectedVersion: int = Field(ge=0)
     values: dict[str, str | int | float | bool]
+
+
+class StoryReferenceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=2, max_length=200)
+    url: str = Field(min_length=10, max_length=2000)
+
+
+class StoryReferenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=2, max_length=200)
+    url: str | None = Field(default=None, min_length=10, max_length=2000)
+    active: bool | None = None
