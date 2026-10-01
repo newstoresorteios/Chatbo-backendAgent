@@ -412,6 +412,9 @@ class ConversasService:
             except Exception as exc:
                 logger.warning("Transcript AI falhou para %s: %s", conversa_id, exc)
 
+        from app.services.ai_handoff_summary import enrich_handoff_summaries
+        mapped = enrich_handoff_summaries(mapped, workspace_id or conversa.get('workspace_id'))
+
         if written:
             try:
                 from app.services.inbox_cache import invalidate_conversa

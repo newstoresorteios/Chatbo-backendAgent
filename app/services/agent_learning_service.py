@@ -15,6 +15,8 @@ from fastapi import HTTPException
 
 from app.config.settings import NSAGENT_PERSONA_TENANT_ID
 from app.services.supabase_service import supabase
+from app.services.agent_instruction_policy import require_valid_instruction
+from app.services.agent_learning_cases import prepare_reviewed_cases, materialize_reviewed_cases
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +385,22 @@ class AgentLearningService:
         workspace_id = extension.get("workspace_id")
         if not workspace_id:
             raise HTTPException(status_code=409, detail="Extensão sem workspace; revise antes de ativar")
+        candidates = (supabase.table("ai_agent_instruction_extensions")
+                      .select("id,instruction_text").eq("workspace_id", workspace_id)
+                      .eq("tenant_id", extension.get("tenant_id") or self.tenant_id())
+                      .eq("status", "active").neq("id", extension["id"]).execute().data or [])
+        try:
+            validation = require_valid_instruction(str(extension.get("instruction_text") or ""), candidates)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        prepared_cases = prepare_reviewed_cases(
+            supabase, extension, tenant_id=self.tenant_id(), workspace_id=workspace_id,
+        )
+        metadata = dict(extension.get("metadata") or {})
+        metadata["policy_validation"] = validation
+        (supabase.table("ai_agent_instruction_extensions").update({"metadata": metadata})
+         .eq("id", extension["id"]).eq("tenant_id", self.tenant_id())
+         .eq("workspace_id", workspace_id).execute())
         try:
             row = supabase.rpc("approve_workspace_instruction_extension", {
                 "p_workspace_id": workspace_id, "p_tenant_id": self.tenant_id(),
@@ -394,6 +412,25 @@ class AgentLearningService:
             raise HTTPException(status_code=502, detail="Não foi possível ativar a extensão") from exc
         if not isinstance(row, dict):
             raise HTTPException(status_code=502, detail="Falha ao ativar extensão")
+        if prepared_cases is not None:
+            try:
+                materialized = materialize_reviewed_cases(supabase, prepared_cases, row, actor=actor)
+                row_metadata = {**(row.get("metadata") or {}), "case_materialization": materialized}
+                updated = (supabase.table("ai_agent_instruction_extensions")
+                           .update({"metadata": row_metadata}).eq("id", row["id"])
+                           .eq("tenant_id", self.tenant_id()).eq("workspace_id", workspace_id)
+                           .execute().data or [])
+                if not updated:
+                    raise RuntimeError("learning_case_materialization_receipt_missing")
+                row = {**row, "metadata": row_metadata}
+            except Exception as exc:
+                logger.error("learning_case_materialization_pending extension_id=%s error_type=%s",
+                             extension["id"], type(exc).__name__)
+                raise HTTPException(status_code=502, detail={
+                    "code": "learning_case_materialization_pending", "extensionId": extension["id"],
+                    "activated": True, "retryable": True,
+                    "message": "Extensão ativada; exemplos ainda pendentes. Repita a aprovação para reconciliar.",
+                }) from exc
         return row
 
     def approve_extension(
