@@ -1,7 +1,7 @@
-"""Agrega dados das tabelas ai_* para o painel de atendimento.
+"""Agrega contexto do agente dentro do workspace autenticado do atendimento.
 
-As tabelas do NSAgentForSorteios não têm workspace_id — consultas vão direto
-ao Postgres compartilhado, sem filtro multi-tenant do ChatBô.
+Linhas legadas sem escopo e memórias sem origem de workspace verificada não
+podem ser exibidas, mesmo quando o telefone existe em mais de uma empresa.
 """
 
 from __future__ import annotations
@@ -12,8 +12,10 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.core.workspace_scope import workspace_id_from_context
 from app.repositories.conversa_repository import ConversaRepository
 from app.services.supabase_service import supabase
+from app.services.workspace_service import workspace_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,24 +49,42 @@ def _sender_key_candidates(conversa: dict) -> list[str]:
     return keys
 
 
-def _query_ai(table: str, filters: dict[str, Any], *, limit: int = 5, order: str = "created_at") -> list[dict]:
+def _query_ai(
+    table: str,
+    filters: dict[str, Any],
+    *,
+    workspace_id: str,
+    limit: int = 5,
+    order: str = "created_at",
+) -> list[dict]:
+    workspace_id = str(workspace_id or "").strip()
+    if not workspace_id:
+        raise HTTPException(status_code=403, detail="Empresa não resolvida para o usuário")
     try:
-        query = supabase.table(table).select("*")
+        query = supabase.table(table).select("*").eq("workspace_id", workspace_id)
+        if table == "ai_contact_memories":
+            query = query.eq("scope_status", "verified")
         for key, value in filters.items():
             if value is None or value == "":
                 continue
             query = query.eq(key, value)
         query = query.order(order, desc=True).limit(limit)
-        return query.execute().data or []
+        rows = query.execute().data or []
+        return [
+            row for row in rows
+            if str(row.get("workspace_id") or "") == workspace_id
+            and (table != "ai_contact_memories" or row.get("scope_status") == "verified")
+        ]
     except Exception as exc:
-        logger.warning("Falha ao ler %s %s: %s", table, filters, exc)
+        # Nunca repetir sem escopo quando uma tabela legada não tem a coluna.
+        logger.warning("Falha ao ler contexto restrito de %s (%s)", table, type(exc).__name__)
         return []
 
 
-def _first_match(table: str, columns: list[str], keys: list[str]) -> dict | None:
+def _first_match(table: str, columns: list[str], keys: list[str], *, workspace_id: str) -> dict | None:
     for key in keys:
         for column in columns:
-            rows = _query_ai(table, {column: key}, limit=1)
+            rows = _query_ai(table, {column: key}, workspace_id=workspace_id, limit=1)
             if rows:
                 return rows[0]
     return None
@@ -151,11 +171,18 @@ class ConversationAgentContextService:
         self.conversas = ConversaRepository()
 
     def obter(self, conversation_id: str, usuario: dict, workspace_id: str | None) -> dict:
-        _ = usuario
+        workspace_id = str(workspace_id or "").strip()
+        if not workspace_id:
+            raise HTTPException(status_code=403, detail="Empresa não resolvida para o usuário")
+        if not usuario or not usuario.get("id"):
+            raise HTTPException(status_code=401, detail="Usuário não autenticado")
+        authenticated_workspace = workspace_id_from_context(
+            workspace_service.get_current_workspace_context(usuario)
+        )
+        if workspace_id != authenticated_workspace:
+            raise HTTPException(status_code=403, detail="Empresa não autorizada para o usuário")
         conversa = self.conversas.obter(conversation_id, workspace_id=workspace_id)
-        if not conversa and workspace_id:
-            conversa = self.conversas.obter(conversation_id, workspace_id=None)
-        if not conversa:
+        if not conversa or str(conversa.get("workspace_id") or "") != workspace_id:
             raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
         sender_keys = _sender_key_candidates(conversa)
@@ -163,12 +190,14 @@ class ConversationAgentContextService:
             "ai_remarketing_contacts",
             ["sender_key", "sender_phone", "identity_key"],
             sender_keys,
+            workspace_id=workspace_id,
         )
         status_row = None
         if contact_row and contact_row.get("id") is not None:
             status_rows = _query_ai(
                 "ai_conversation_statuses",
                 {"contact_id": contact_row.get("id")},
+                workspace_id=workspace_id,
                 limit=1,
                 order="updated_at",
             )
@@ -183,6 +212,7 @@ class ConversationAgentContextService:
                 memories_items = _query_ai(
                     "ai_contact_memories",
                     {"sender_key": key, "status": "active"},
+                    workspace_id=workspace_id,
                     limit=5,
                     order="updated_at",
                 )
@@ -190,12 +220,14 @@ class ConversationAgentContextService:
                 responses_items = _query_ai(
                     "ai_agent_responses",
                     {"sender_key": key},
+                    workspace_id=workspace_id,
                     limit=3,
                 )
             if not pix_items:
                 pix_items = _query_ai(
                     "ai_pix_payments",
                     {"sender_key": key},
+                    workspace_id=workspace_id,
                     limit=5,
                     order="updated_at",
                 )
@@ -208,6 +240,7 @@ class ConversationAgentContextService:
                 pix_items = _query_ai(
                     "ai_pix_payments",
                     {"conversation_id": conv_key},
+                    workspace_id=workspace_id,
                     limit=5,
                     order="updated_at",
                 )
