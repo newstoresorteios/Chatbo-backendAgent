@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
@@ -33,13 +34,20 @@ from app.routes.ai import router as ai_router
 from app.routes.ai.crm_gaps import router as crm_gaps_router
 from app.routes.commercial_bi import router as commercial_bi_router
 from app.routes.agent_learning import router as agent_learning_router
+from app.routes.tray_customers import router as tray_customers_router
 
 validar_jwt_secret()
 
 
 @asynccontextmanager
 async def lifespan(app):
-    yield
+    from app.services.tray_customer_worker import tray_customer_worker
+    task = asyncio.create_task(tray_customer_worker.run())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     from app.services.inbox_events import inbox_events
     await inbox_events.close()
 
@@ -73,6 +81,7 @@ api.include_router(workspace_router, tags=["Workspace"])
 api.include_router(personas_router, tags=["Personas"])
 api.include_router(commercial_bi_router, tags=["CommercialBI"])
 api.include_router(agent_learning_router, tags=["AgentLearning"])
+api.include_router(tray_customers_router, tags=["Tray"])
 api.include_router(billing_router, tags=["Billing"])
 api.include_router(internal_router, tags=["Internal"])
 api.include_router(agents_router, tags=["Agents"])

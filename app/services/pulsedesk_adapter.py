@@ -111,9 +111,17 @@ def listar_clientes(
     whatsapp_only: bool = False,
 ) -> dict:
     workspace_id = _require_workspace_id(workspace_id)
-    query = apply_workspace_filter(supabase.table("clientes").select("*"), workspace_id)
-    resposta = query.execute()
-    rows = resposta.data or []
+    rows = []
+    offset = 0
+    while True:
+        query = apply_workspace_filter(supabase.table("clientes").select(
+            "id,mercos_id,nome,razao_social,email,telefone,celular,cidade,ultima_alteracao"
+        ), workspace_id)
+        batch = query.order("id").range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += len(batch)
 
     if whatsapp_only:
         rows = [

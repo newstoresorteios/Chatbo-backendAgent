@@ -22,6 +22,20 @@ class SendMessageRequest(BaseModel):
     sender: str = "agent"
 
 
+class OpenCustomerRequest(BaseModel):
+    customerId: str = Field(min_length=1, max_length=80)
+
+
+@router.post("/conversas/cliente")
+def open_customer_conversation(body: OpenCustomerRequest,
+                              usuario: dict = Depends(obter_usuario_atual),
+                              context: dict = Depends(obter_company_context)):
+    from app.services.customer_conversation_service import customer_conversation_service
+    return customer_conversation_service.open(
+        body.customerId, workspace_id_from_context(context), str(usuario["id"])
+    )
+
+
 class TransferRequest(BaseModel):
     assigneeId: str = Field(min_length=1)
 

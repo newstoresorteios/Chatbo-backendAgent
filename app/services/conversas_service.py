@@ -37,7 +37,7 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
             profile_url = f"https://www.instagram.com/{quote(profile_username, safe='._')}/"
     return {
         "id": str(row.get("id")),
-        "customerId": str(row.get("cliente_mercos_id") or ""),
+        "customerId": str(row.get("cliente_mercos_id") or row.get("cliente_id") or ""),
         "customerName": row.get("customer_name") or "Cliente",
         "customerAvatar": row.get("customer_avatar"),
         "profileUsername": profile_username,

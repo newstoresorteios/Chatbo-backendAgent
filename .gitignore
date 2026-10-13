@@ -19,3 +19,5 @@ build/
 Thumbs.db
 
 pytest-history-evaluation.txt
+output/tray-customers-checkpoint.json
+output/tray-customers-checkpoint.tmp
