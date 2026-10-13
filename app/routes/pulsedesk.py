@@ -45,6 +45,7 @@ def get_clientes(
     page: int = 1,
     pageSize: int = 10,
     search: str = "",
+    whatsappOnly: bool = False,
     autorizado=Depends(verificar_token),
     context: dict = Depends(obter_company_context),
 ):
@@ -53,6 +54,7 @@ def get_clientes(
         page_size=pageSize,
         search=search,
         workspace_id=workspace_id_from_context(context),
+        whatsapp_only=whatsappOnly,
     )
 
 

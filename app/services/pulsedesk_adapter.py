@@ -5,6 +5,7 @@ from app.core.workspace_scope import apply_workspace_filter
 from app.services.supabase_service import supabase
 from app.repositories.dashboard_repository import DashboardRepository
 from app.services.dashboard_service import DashboardService
+from app.services.customer_phone import whatsapp_phone
 
 
 def _require_workspace_id(workspace_id: str | None) -> str:
@@ -107,14 +108,23 @@ def listar_clientes(
     page_size: int = 10,
     search: str = "",
     workspace_id: str | None = None,
+    whatsapp_only: bool = False,
 ) -> dict:
     workspace_id = _require_workspace_id(workspace_id)
     query = apply_workspace_filter(supabase.table("clientes").select("*"), workspace_id)
     resposta = query.execute()
     rows = resposta.data or []
 
+    if whatsapp_only:
+        rows = [
+            {**row, "telefone": phone}
+            for row in rows
+            if (phone := whatsapp_phone(row.get("celular")) or whatsapp_phone(row.get("telefone")))
+        ]
+
     if search:
-        termo = search.lower()
+        termo = search.strip().lower()
+        phone_term = "".join(char for char in termo if char.isdigit())
         rows = [
             row for row in rows
             if termo in (row.get("nome") or "").lower()
@@ -123,6 +133,9 @@ def listar_clientes(
             or termo in (row.get("celular") or "").lower()
             or termo in (row.get("cidade") or "").lower()
             or termo in (row.get("razao_social") or "").lower()
+            or (bool(phone_term) and phone_term in "".join(
+                char for char in str(row.get("telefone") or "") if char.isdigit()
+            ))
         ]
 
     return _paginate([_map_cliente(row) for row in rows], page, page_size)
