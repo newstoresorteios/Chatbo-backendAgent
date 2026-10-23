@@ -1,6 +1,7 @@
 """Authenticated YCloud channel controls and public signed webhook."""
 
 import json
+import logging
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -10,6 +11,8 @@ from app.core.permissions import requer_permissao
 from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.providers.whatsapp_ycloud import verify_signature
 from app.services.ycloud_service import ycloud_service
+
+logger = logging.getLogger(__name__)
 
 api_router = APIRouter()
 webhook_router = APIRouter()
@@ -34,6 +37,7 @@ def connect_ycloud(body: ConnectRequest, _admin: dict = Depends(requer_permissao
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise
+        logger.exception("Falha ao validar/conectar número YCloud")
         raise HTTPException(502, "Não foi possível validar o número na YCloud") from exc
 
 
