@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -68,21 +69,57 @@ class YCloudService:
     def __init__(self, *, provider: YCloudProvider | None = None,
                  channels=None, conversations=None, messages=None, bot_handler=None):
         self.provider = provider
+        self._configured: list[YCloudProvider] | None = None
         self.channels = channels if channels is not None else PlatformRepository()
         self.conversations = conversations if conversations is not None else ConversaRepository()
         self.messages = messages if messages is not None else MensagemRepository()
         self.bot_handler = bot_handler
 
-    def _provider(self) -> YCloudProvider:
-        if self.provider is None:
-            self.provider = YCloudProvider(
-                os.getenv("YCLOUD_API_KEY", ""), os.getenv("YCLOUD_PHONE_NUMBER", ""),
-                os.getenv("YCLOUD_WABA_ID", ""), os.getenv("YCLOUD_PHONE_NUMBER_ID"),
-            )
-        return self.provider
+    def _providers(self) -> list[YCloudProvider]:
+        """Every configured number. One API key serves the whole YCloud account."""
+        if self.provider is not None:
+            return [self.provider]
+        if self._configured is None:
+            api_key = os.getenv("YCLOUD_API_KEY", "")
+            raw = os.getenv("YCLOUD_NUMBERS", "").strip()
+            if raw:
+                try:
+                    items = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("YCLOUD_NUMBERS inválido") from exc
+                if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
+                    raise ValueError("YCLOUD_NUMBERS deve ser uma lista de números")
+                self._configured = [
+                    YCloudProvider(api_key, i.get("phone", ""), i.get("waba_id", ""), i.get("phone_number_id"))
+                    for i in items
+                ]
+            else:
+                self._configured = [YCloudProvider(
+                    api_key, os.getenv("YCLOUD_PHONE_NUMBER", ""),
+                    os.getenv("YCLOUD_WABA_ID", ""), os.getenv("YCLOUD_PHONE_NUMBER_ID"),
+                )]
+        return self._configured
 
-    def _matching_channels(self) -> list[dict]:
-        provider = self._provider()
+    def _provider(self, phone: str | None = None) -> YCloudProvider:
+        providers = self._providers()
+        if not phone:
+            return providers[0]
+        wanted = normalize_phone(phone)
+        found = next((item for item in providers if item.phone_number == wanted), None)
+        if found is None:
+            raise ValueError("Número não configurado para a YCloud")
+        return found
+
+    def _provider_for(self, waba_id: str, phone: str) -> YCloudProvider | None:
+        try:
+            wanted = normalize_phone(phone)
+        except ValueError:
+            return None
+        return next((item for item in self._providers()
+                     if item.waba_id == str(waba_id or "") and item.phone_number == wanted), None)
+
+    def _matching_channels(self, provider: YCloudProvider | None = None) -> list[dict]:
+        provider = provider or self._provider()
         matches = []
         for row in self.channels.list_canais():
             if row.get("provider") != "ycloud" or str(row.get("waba_id") or "") != provider.waba_id:
@@ -94,36 +131,49 @@ class YCloudService:
                 continue
         return matches
 
-    def status(self, workspace_id: str) -> dict:
-        try:
-            provider = self._provider()
-            matches = self._matching_channels()
-            channel = next((row for row in matches
-                            if str(row.get("workspace_id") or "") == str(workspace_id)), None)
-            claimed_elsewhere = bool(matches and not channel)
-        except ValueError:
-            provider, channel, claimed_elsewhere = None, None, False
-        from app.config.settings import PUBLIC_API_URL
-
+    def _number_status(self, provider: YCloudProvider, workspace_id: str) -> dict:
+        matches = self._matching_channels(provider)
+        channel = next((row for row in matches
+                        if str(row.get("workspace_id") or "") == str(workspace_id)), None)
+        claimed_elsewhere = bool(matches and not channel)
         return {
-            "configured": provider is not None and not claimed_elsewhere
-            and bool(os.getenv("YCLOUD_WEBHOOK_SECRET", "").strip()),
+            "phone": provider.phone_number if not claimed_elsewhere else None,
+            "wabaId": provider.waba_id,
+            "claimedElsewhere": claimed_elsewhere,
             "connected": bool(channel and channel.get("connected")),
-            "provider": "ycloud",
-            "phone": provider.phone_number if provider and not claimed_elsewhere else None,
             "canalId": channel.get("id") if channel else None,
             "providerStatus": channel.get("provider_status") if channel else "pending",
+        }
+
+    def status(self, workspace_id: str) -> dict:
+        try:
+            numbers = [self._number_status(item, workspace_id) for item in self._providers()]
+        except ValueError:
+            numbers = []
+        from app.config.settings import PUBLIC_API_URL
+
+        has_secret = bool(os.getenv("YCLOUD_WEBHOOK_SECRET", "").strip())
+        first = numbers[0] if numbers else None
+        usable = [item for item in numbers if not item["claimedElsewhere"]]
+        return {
+            "configured": bool(usable) and has_secret,
+            "connected": bool(first and first["connected"]),
+            "provider": "ycloud",
+            "phone": first["phone"] if first else None,
+            "canalId": first["canalId"] if first else None,
+            "providerStatus": first["providerStatus"] if first else "pending",
+            "numbers": numbers,
             "webhookUrl": f"{PUBLIC_API_URL.rstrip('/')}/webhooks/ycloud" if PUBLIC_API_URL else None,
         }
 
-    def connect(self, workspace_id: str, name: str) -> dict:
+    def connect(self, workspace_id: str, name: str, phone: str | None = None) -> dict:
         if not workspace_id:
             raise HTTPException(403, "Empresa não resolvida")
         if not os.getenv("YCLOUD_WEBHOOK_SECRET", "").strip():
             raise HTTPException(503, "Configure YCLOUD_WEBHOOK_SECRET antes de ativar o canal")
-        provider = self._provider()
+        provider = self._provider(phone)
         remote = provider.validate_number()
-        existing = self._matching_channels()
+        existing = self._matching_channels(provider)
         if any(str(row.get("workspace_id") or "") != str(workspace_id) for row in existing):
             raise HTTPException(409, "Número YCloud já vinculado a outra empresa")
         data = {
@@ -145,15 +195,10 @@ class YCloudService:
         }
 
     def _channel_for_inbound(self, message: dict) -> dict | None:
-        provider = self._provider()
-        if str(message.get("wabaId") or "") != provider.waba_id:
+        provider = self._provider_for(message.get("wabaId"), message.get("to") or "")
+        if provider is None:
             return None
-        try:
-            if normalize_phone(message.get("to") or "") != provider.phone_number:
-                return None
-        except ValueError:
-            return None
-        return next((row for row in self._matching_channels()
+        return next((row for row in self._matching_channels(provider)
                      if row.get("connected") and row.get("workspace_id")), None)
 
     @staticmethod
@@ -164,19 +209,18 @@ class YCloudService:
             raise HTTPException(409, "Janela de 24 horas encerrada; use um template aprovado")
 
     def send_for_conversation(self, conversation: dict, body: str) -> dict:
-        provider = self._provider()
         channel = self.channels.get_canal(str(conversation.get("canal_id") or ""))
         if not channel or channel.get("provider") != "ycloud" or not channel.get("connected"):
             return {"sent": False, "reason": "Canal YCloud não conectado"}
         if str(channel.get("workspace_id") or "") != str(conversation.get("workspace_id") or ""):
             return {"sent": False, "reason": "Canal YCloud incompatível com a empresa"}
-        if str(channel.get("waba_id") or "") != provider.waba_id:
-            return {"sent": False, "reason": "WABA YCloud incompatível"}
         try:
-            if normalize_phone(channel.get("display_phone") or "") != provider.phone_number:
-                return {"sent": False, "reason": "Número YCloud incompatível"}
+            normalize_phone(channel.get("display_phone") or "")
         except ValueError:
             return {"sent": False, "reason": "Número YCloud inválido"}
+        provider = self._provider_for(channel.get("waba_id"), channel.get("display_phone") or "")
+        if provider is None:
+            return {"sent": False, "reason": "Número YCloud incompatível"}
         self.ensure_text_window(conversation)
         try:
             message_id = provider.send_text(conversation.get("contact_phone") or "", body)
@@ -202,18 +246,16 @@ class YCloudService:
         inbound = event.get("whatsappInboundMessage")
         message = inbound or event.get("whatsappMessage") or {}
         direction = "inbound" if inbound else "outbound"
-        provider = self._provider()
         business, customer_key = ("to", "from") if inbound else ("from", "to")
-        if str(message.get("wabaId") or "") != provider.waba_id:
+        provider = self._provider_for(message.get("wabaId"), message.get(business) or "")
+        if provider is None:
             return False
-        channel = next((row for row in self._matching_channels()
+        channel = next((row for row in self._matching_channels(provider)
                         if row.get("connected") and row.get("workspace_id")), None)
         raw_id = str(message.get("id") or message.get("wamid") or "").strip()
         if not channel or not raw_id:
             return False
         try:
-            if normalize_phone(message.get(business) or "") != provider.phone_number:
-                return False
             customer = normalize_phone(message.get(customer_key) or "")
             stamped = _event_time(message.get("sendTime") or message.get("createTime"))
         except ValueError:
@@ -305,12 +347,14 @@ class YCloudService:
         if not provider_id or incoming not in _STATUS_ORDER:
             return False
         try:
-            provider = self._provider()
-            if not any(row.get("connected") for row in self._matching_channels()):
-                return False
-            if payload.get("wabaId") and str(payload["wabaId"]) != provider.waba_id:
-                return False
-            if payload.get("from") and normalize_phone(payload["from"]) != provider.phone_number:
+            candidates = self._providers()
+            if payload.get("wabaId"):
+                candidates = [item for item in candidates if item.waba_id == str(payload["wabaId"])]
+            if payload.get("from"):
+                sender = normalize_phone(payload["from"])
+                candidates = [item for item in candidates if item.phone_number == sender]
+            if not any(row.get("connected") for item in candidates
+                       for row in self._matching_channels(item)):
                 return False
         except ValueError:
             return False

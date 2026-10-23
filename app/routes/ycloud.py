@@ -20,6 +20,7 @@ webhook_router = APIRouter()
 
 class ConnectRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
+    phone: str | None = Field(default=None, max_length=32)
 
 
 @api_router.get("/ycloud/status")
@@ -31,7 +32,7 @@ def ycloud_status(context: dict = Depends(obter_company_context)):
 def connect_ycloud(body: ConnectRequest, _admin: dict = Depends(requer_permissao("managePlatform")),
                    context: dict = Depends(obter_company_context)):
     try:
-        return ycloud_service.connect(workspace_id_from_context(context), body.name)
+        return ycloud_service.connect(workspace_id_from_context(context), body.name, body.phone)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:

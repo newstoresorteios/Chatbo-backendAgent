@@ -879,3 +879,57 @@ def test_history_ignores_other_business_number_and_progress_only_events():
     assert service.process_event(other)["processed"] == 0
     assert service.process_event({"type": "whatsapp.smb.history", "phase": 0, "progress": 10})["processed"] == 0
     assert conversations.rows == [] and messages.rows == []
+
+
+def _provider_for_number(phone, waba):
+    from app.providers.whatsapp_ycloud import YCloudProvider
+
+    provider = YCloudProvider("key", phone, waba)
+    provider.validate_number = lambda: {"id": "id-" + waba}
+    return provider
+
+
+def test_multiple_numbers_route_history_to_their_own_channels(monkeypatch):
+    from app.services.ycloud_service import YCloudService
+
+    monkeypatch.setenv("YCLOUD_API_KEY", "key")
+    monkeypatch.setenv("YCLOUD_NUMBERS", json.dumps([
+        {"phone": "+5543996676633", "waba_id": "waba-1"},
+        {"phone": "+5511988887777", "waba_id": "waba-2"},
+    ]))
+    channels = _Channels([
+        {"id": "pilot", "type": "whatsapp", "provider": "ycloud", "connected": True,
+         "workspace_id": "workspace-a", "waba_id": "waba-1", "display_phone": "+5543996676633"},
+        {"id": "main", "type": "whatsapp", "provider": "ycloud", "connected": True,
+         "workspace_id": "workspace-a", "waba_id": "waba-2", "display_phone": "+5511988887777"},
+    ])
+    conversations, messages = _Conversations(), _Messages()
+    conversations.message_store = messages
+    messages.conversations = conversations
+    service = YCloudService(channels=channels, conversations=conversations, messages=messages)
+
+    main_event = _history_event("inbound", "m-1")
+    main_event["whatsappInboundMessage"].update(wabaId="waba-2", to="5511988887777")
+    assert service.process_event(_history_event("inbound", "p-1"))["processed"] == 1
+    assert service.process_event(main_event)["processed"] == 1
+
+    assert sorted(row["canal_id"] for row in conversations.rows) == ["main", "pilot"]
+    status = service.status("workspace-a")
+    assert [item["phone"] for item in status["numbers"]] == ["+5543996676633", "+5511988887777"]
+    assert all(item["connected"] for item in status["numbers"])
+
+
+def test_connect_selects_the_requested_number(monkeypatch):
+    from app.services.ycloud_service import YCloudService
+
+    monkeypatch.setenv("YCLOUD_WEBHOOK_SECRET", "test-secret")
+    second = _provider_for_number("+5511988887777", "waba-2")
+    service = YCloudService(channels=_Channels(), conversations=_Conversations(), messages=_Messages())
+    service._configured = [_provider_for_number("+5543996676633", "waba-1"), second]
+
+    result = service.connect("workspace-a", "Principal", "+55 11 98888-7777")
+
+    assert result["phone"] == "+5511988887777"
+    assert service.channels.rows[0]["waba_id"] == "waba-2"
+    with pytest.raises(ValueError):
+        service.connect("workspace-a", "Outro", "+5500000000000")

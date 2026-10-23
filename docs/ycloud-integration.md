@@ -97,3 +97,13 @@ Para números conectados à YCloud em modo de coexistência com o app WhatsApp B
 3. As mensagens são gravadas por contato: recebidas como `customer`, enviadas pelo app como `agent`. Duplicatas são ignoradas pelo ID externo.
 4. O histórico não gera contagem de não lidas, resposta do bot nem pedido de atendimento. Conversas criadas apenas pelo histórico ficam como encerradas; uma nova mensagem do cliente as reabre.
 5. A Meta dispara o envio do histórico no momento da conexão do número. A YCloud não oferece consulta sob demanda de mensagens WhatsApp. Um backend atende um único número; para importar o histórico do número principal, o ambiente precisa estar configurado com ele.
+
+## Vários números no mesmo backend
+
+A chave de API e o segredo do webhook são da conta YCloud e valem para todos os números. Para ativar mais de um número, defina no Render a variável (sem segredos), substituindo as três variáveis de número únicas:
+
+```dotenv
+YCLOUD_NUMBERS=[{"phone":"+554396676633","waba_id":"2253102025094670","phone_number_id":"1312419621949456"},{"phone":"+55DDDNUMERO","waba_id":"WABA_DO_PRINCIPAL","phone_number_id":"ID_DO_PRINCIPAL"}]
+```
+
+Sem `YCLOUD_NUMBERS`, continuam valendo `YCLOUD_PHONE_NUMBER`, `YCLOUD_WABA_ID` e `YCLOUD_PHONE_NUMBER_ID`. Em **Canais → WhatsApp via YCloud** cada número tem o próprio botão **Validar e conectar**. Mensagens, status e histórico (`whatsapp.smb.history`) são roteados ao canal do número correto, e cada número envia pelo próprio remetente.
