@@ -193,7 +193,46 @@ class YCloudService:
             return {"processed": int(processed), "bot_jobs": [job] if job else []}
         if event_type == "whatsapp.message.updated":
             return {"processed": int(self.update_status(event.get("whatsappMessage") or {})), "bot_jobs": []}
+        if event_type == "whatsapp.smb.history":
+            return {"processed": int(self.ingest_history(event)), "bot_jobs": []}
         return {"processed": 0, "bot_jobs": []}
+
+    def ingest_history(self, event: dict) -> bool:
+        """Store one coexistence history message without bot, unread or handoff effects."""
+        inbound = event.get("whatsappInboundMessage")
+        message = inbound or event.get("whatsappMessage") or {}
+        direction = "inbound" if inbound else "outbound"
+        provider = self._provider()
+        business, customer_key = ("to", "from") if inbound else ("from", "to")
+        if str(message.get("wabaId") or "") != provider.waba_id:
+            return False
+        channel = next((row for row in self._matching_channels()
+                        if row.get("connected") and row.get("workspace_id")), None)
+        raw_id = str(message.get("id") or message.get("wamid") or "").strip()
+        if not channel or not raw_id:
+            return False
+        try:
+            if normalize_phone(message.get(business) or "") != provider.phone_number:
+                return False
+            customer = normalize_phone(message.get(customer_key) or "")
+            stamped = _event_time(message.get("sendTime") or message.get("createTime"))
+        except ValueError:
+            return False
+        content = _content(message)
+        if not content:
+            return False
+        name = str((message.get("customerProfile") or {}).get("name") or "").strip() or customer
+        result = self.conversations.ingest_ycloud_history(
+            channel_id=str(channel["id"]), workspace_id=str(channel["workspace_id"]),
+            external_id=f"ycloud:{raw_id}", customer=customer, customer_name=name,
+            content=content, sent_at=stamped.isoformat(), direction=direction,
+        )
+        if not result.get("inserted"):
+            return False
+        from app.services.inbox_cache import invalidate_conversa
+
+        invalidate_conversa(str(result["conversation_id"]), str(channel["workspace_id"]))
+        return True
 
     def ingest_inbound(self, message: dict) -> tuple[bool, tuple[str, str, str] | None]:
         channel = self._channel_for_inbound(message)

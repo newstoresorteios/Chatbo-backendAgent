@@ -166,6 +166,26 @@ class _Conversations:
                 "should_reply": row.get("status") == "active" and not row.get("assigned_to")
                 and row.get("bot_activated") is not False and not human_request}
 
+    def ingest_ycloud_history(self, *, channel_id, workspace_id, external_id, customer,
+                              customer_name, content, sent_at, direction):
+        messages = self.message_store
+        if messages.obter_por_external_id(external_id):
+            return {"inserted": False}
+        row = self.obter_por_thread(channel_id, customer)
+        if row is None:
+            row = self.criar({
+                "canal_id": channel_id, "external_thread_id": customer, "contact_phone": customer,
+                "customer_name": customer_name, "channel": "whatsapp", "provider": "ycloud",
+                "status": "closed", "bot_activated": True, "unread_count": 0,
+                "last_message": "", "last_message_at": sent_at,
+            }, workspace_id)
+        inbound = direction == "inbound"
+        messages.criar({"conversa_id": row["id"], "workspace_id": workspace_id,
+                        "external_id": external_id, "content": content,
+                        "sender": "customer" if inbound else "agent", "direction": direction,
+                        "created_at": sent_at})
+        return {"inserted": True, "conversation_id": row["id"]}
+
     def obter_por_thread(self, channel_id, thread_id):
         return next((row for row in self.rows if row["canal_id"] == channel_id
                      and row["external_thread_id"] == thread_id), None)
@@ -813,3 +833,49 @@ def test_inbound_repository_uses_atomic_database_function():
     assert result["inserted"] is True
     assert database.rpc.call_args.args[0] == "ycloud_ingest_inbound"
     assert database.rpc.call_args.args[1]["p_external_id"] == "ycloud:in-1"
+
+
+def _history_event(direction, message_id, sent_at="2026-01-05T10:00:00Z"):
+    base = {"id": message_id, "wabaId": "waba-1", "sendTime": sent_at,
+            "type": "text", "text": {"body": "Mensagem antiga"}}
+    if direction == "inbound":
+        base.update({"from": "5511999999999", "to": "5543996676633",
+                     "customerProfile": {"name": "Cliente Antigo"}})
+        return {"type": "whatsapp.smb.history", "whatsappInboundMessage": base}
+    base.update({"from": "5543996676633", "to": "5511999999999"})
+    return {"type": "whatsapp.smb.history", "whatsappMessage": base}
+
+
+_PILOT_ROW = {
+    "id": "pilot", "type": "whatsapp", "provider": "ycloud", "connected": True,
+    "workspace_id": "workspace-a", "waba_id": "waba-1", "display_phone": "+5543996676633",
+}
+
+
+def test_history_stores_both_directions_per_contact_without_side_effects():
+    conversations, messages = _Conversations(), _Messages()
+    service = _service(_Channels([dict(_PILOT_ROW)]), conversations, messages)
+
+    first = service.process_event(_history_event("inbound", "h-1"))
+    second = service.process_event(_history_event("outbound", "h-2"))
+    repeat = service.process_event(_history_event("inbound", "h-1"))
+
+    assert first == {"processed": 1, "bot_jobs": []}
+    assert second == {"processed": 1, "bot_jobs": []}
+    assert repeat == {"processed": 0, "bot_jobs": []}
+    assert len(conversations.rows) == 1
+    assert conversations.rows[0]["status"] == "closed"
+    assert conversations.rows[0]["unread_count"] == 0
+    assert [(m["sender"], m["direction"]) for m in messages.rows] == [
+        ("customer", "inbound"), ("agent", "outbound")]
+
+
+def test_history_ignores_other_business_number_and_progress_only_events():
+    conversations, messages = _Conversations(), _Messages()
+    service = _service(_Channels([dict(_PILOT_ROW)]), conversations, messages)
+    other = _history_event("inbound", "h-3")
+    other["whatsappInboundMessage"]["to"] = "5511888888888"
+
+    assert service.process_event(other)["processed"] == 0
+    assert service.process_event({"type": "whatsapp.smb.history", "phase": 0, "progress": 10})["processed"] == 0
+    assert conversations.rows == [] and messages.rows == []

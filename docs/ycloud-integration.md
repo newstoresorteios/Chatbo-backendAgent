@@ -87,3 +87,13 @@ No frontend: `npm ci`, `npm test -- --run` e `npm run build`. O lint global pode
 - A integração real depende do número piloto registrado na YCloud, das credenciais, da migration no banco usado pela aplicação e de um webhook HTTPS acessível. Testes locais não confirmam operação de produção.
 - Mídias recebidas aparecem como mensagem descritiva no histórico; o arquivo de mídia não é baixado. Envio de anexos e templates YCloud ainda não estão disponíveis.
 - Um ambiente de backend usa um conjunto de credenciais YCloud e um número piloto. Para adicionar o número principal depois, planeje configuração por canal/segredo antes de ativar um segundo número no mesmo ambiente.
+
+## Histórico de números em coexistência
+
+Para números conectados à YCloud em modo de coexistência com o app WhatsApp Business, a YCloud envia o histórico pelo evento `whatsapp.smb.history`.
+
+1. Aplique `supabase/migrations/20261023170000_ycloud_history_import.sql` no mesmo projeto Supabase.
+2. Na YCloud, adicione `whatsapp.smb.history` aos eventos do endpoint `https://SEU_BACKEND/webhooks/ycloud`.
+3. As mensagens são gravadas por contato: recebidas como `customer`, enviadas pelo app como `agent`. Duplicatas são ignoradas pelo ID externo.
+4. O histórico não gera contagem de não lidas, resposta do bot nem pedido de atendimento. Conversas criadas apenas pelo histórico ficam como encerradas; uma nova mensagem do cliente as reabre.
+5. A Meta dispara o envio do histórico no momento da conexão do número. A YCloud não oferece consulta sob demanda de mensagens WhatsApp. Um backend atende um único número; para importar o histórico do número principal, o ambiente precisa estar configurado com ele.
