@@ -245,6 +245,17 @@ def assumir_conversa(
     )
 
 
+@router.patch("/conversas/{conversation_id}/devolver-bot")
+def devolver_ao_bot(
+    conversation_id: str,
+    payload: dict = Depends(obter_token_payload),
+    context: dict = Depends(obter_company_context),
+):
+    return contact_inbox.devolver_ao_bot(
+        conversation_id, workspace_id_from_context(context), payload["sub"], _actor_name(payload),
+    )
+
+
 @router.patch("/conversas/{conversation_id}/encerrar")
 def encerrar_conversa(
     conversation_id: str,

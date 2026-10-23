@@ -26,9 +26,13 @@ class ContactInboxRepository:
                         .in_("id", ids[offset:offset + 100]).execute().data or [])
         return rows
 
-    def atualizar_abertas(self, group: dict, workspace_id: str, patch: dict) -> list[dict]:
-        return (supabase.table("conversas").update(patch).eq("workspace_id", workspace_id)
-                .in_("id", group["session_ids"]).neq("status", "closed").execute().data or [])
+    def atualizar_abertas(self, group: dict, workspace_id: str, patch: dict,
+                         *, expected_assignee: str | None = None) -> list[dict]:
+        query = (supabase.table("conversas").update(patch).eq("workspace_id", workspace_id)
+                 .in_("id", group["session_ids"]).neq("status", "closed"))
+        if expected_assignee is not None:
+            query = query.eq("assigned_to", expected_assignee)
+        return query.execute().data or []
 
     def mensagens(self, group: dict, workspace_id: str, *, limit: int,
                   before: str | None = None, before_id: str | None = None, after: str | None = None) -> list[dict]:

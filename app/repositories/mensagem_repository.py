@@ -3,6 +3,22 @@ from app.services.supabase_service import supabase
 
 class MensagemRepository:
 
+    def attach_ycloud_outbound(self, message_id: str, external_id: str,
+                               workspace_id: str) -> dict:
+        response = supabase.rpc("ycloud_attach_outbound", {
+            "p_message_id": message_id, "p_external_id": external_id,
+            "p_workspace_id": workspace_id,
+        }).execute()
+        return response.data or {}
+
+    def record_ycloud_status(self, external_id: str, status: str,
+                             waba_id: str | None, sender_number: str | None) -> dict:
+        response = supabase.rpc("ycloud_record_status", {
+            "p_external_id": external_id, "p_status": status,
+            "p_waba_id": waba_id, "p_from": sender_number,
+        }).execute()
+        return response.data or {}
+
     def ultima_entrada_meta(self, conversa_id: str) -> dict | None:
         rows = (
             supabase.table("mensagens")

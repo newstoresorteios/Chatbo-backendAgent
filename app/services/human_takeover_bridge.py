@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 def mark_human_active(conversa: dict, *, source: str) -> None:
+    if conversa.get("provider") == "ycloud":
+        return  # O takeover do piloto é local à conversa, não ao NSAgent por telefone.
     keys: list[str] = []
     for field in ("external_thread_id", "contact_phone"):
         value = str(conversa.get(field) or "").strip()

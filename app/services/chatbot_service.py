@@ -1,7 +1,7 @@
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.repositories.conversa_repository import ConversaRepository
 from app.repositories.mensagem_repository import MensagemRepository
@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 RESOLVED_PATTERN = re.compile(
     r"\b(obrigad[oa]|valeu|resolvido|perfeito|at[eé]\s+mais|pode\s+encerrar)\b",
     re.I,
+)
+YCLOUD_HANDOFF_PATTERN = re.compile(
+    r"\b(n[aã]o sei responder|n[aã]o tenho (?:essa )?informa[cç][aã]o|"
+    r"n[aã]o encontrei|temporariamente indispon[ií]vel)\b", re.I,
 )
 
 
@@ -87,8 +91,11 @@ class ChatbotService:
         if conversa.get("assigned_to"):
             return None
 
+        if conversa.get("provider") == "ycloud" and conversa.get("bot_activated") is False:
+            return None
+
         messages = self.mensagens.listar_por_conversa(conversa_id)
-        if self._human_agent_active(messages):
+        if conversa.get("provider") != "ycloud" and self._human_agent_active(messages):
             return None
 
         flow = self.platform.get_chatbot(flow_id) if flow_id else self._active_flow(channel)
@@ -113,6 +120,8 @@ class ChatbotService:
                 customer_id=str(conversa.get("cliente_mercos_id") or "") or None,
                 mode="agent",
                 history=history,
+                **({"workspace_id": conversa.get("workspace_id")}
+                   if conversa.get("provider") == "ycloud" else {}),
             )
         except Exception as exc:
             logger.warning("Chatbot IA falhou (%s): %s", conversa_id, exc)
@@ -122,11 +131,35 @@ class ChatbotService:
         if not reply:
             return None
 
+        handoff_requested = conversa.get("provider") == "ycloud" and (
+            result.get("handoffRequired") is True or result.get("handoff_required") is True
+            or bool(YCLOUD_HANDOFF_PATTERN.search(reply))
+        )
+        if handoff_requested:
+            reply = "Não tenho uma resposta segura agora. Vou chamar um atendente para ajudar você."
+
+        if conversa.get("provider") == "ycloud":
+            current = self.conversas.obter(conversa_id)
+            if not current or current.get("status") != "active" or current.get("assigned_to") or current.get("bot_activated") is False:
+                return None
+
         try:
             self.conversas_service.enviar_mensagem(conversa_id, reply, sender="ai")
         except Exception as exc:
             logger.warning("Chatbot nao enviou resposta (%s): %s", conversa_id, exc)
             return None
+
+        if handoff_requested:
+            current = self.conversas.obter(conversa_id)
+            if current and current.get("status") == "active" and not current.get("assigned_to"):
+                self.conversas.atualizar(conversa_id, {
+                    "status": "waiting", "bot_activated": False,
+                    "handoff_requested_at": datetime.now(timezone.utc).isoformat(),
+                    "handoff_reason": "bot_unavailable",
+                }, workspace_id=conversa.get("workspace_id"))
+                from app.services.inbox_cache import invalidate_conversa
+
+                invalidate_conversa(conversa_id, str(conversa.get("workspace_id") or ""))
 
         resolved = bool(RESOLVED_PATTERN.search(message))
         self._update_metrics(conversa, flow, resolved=resolved)
@@ -138,6 +171,7 @@ class ChatbotService:
             "reply": reply,
             "source": result.get("source", "intelligent"),
             "resolved": resolved,
+            "handoffRequested": bool(handoff_requested),
         }
 
     def test_flow(

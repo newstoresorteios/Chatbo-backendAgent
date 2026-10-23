@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from app.core.auth import verificar_token
 from app.core.permissions import requer_permissao
-from app.core.workspace_scope import obter_company_context
+from app.core.workspace_scope import obter_company_context, workspace_id_from_context
 from app.services.platform_service import platform_service
 
 router = APIRouter()
@@ -51,8 +51,8 @@ class ChatbotTestRequest(BaseModel):
 
 
 @router.get("/canais")
-def get_canais(autorizado=Depends(verificar_token)):
-    return platform_service.get_channels()
+def get_canais(autorizado=Depends(verificar_token), context: dict = Depends(obter_company_context)):
+    return platform_service.get_channels(workspace_id_from_context(context))
 
 
 @router.post("/canais")
@@ -61,16 +61,19 @@ def connect_canal(body: ChannelCreate, _: dict = Depends(requer_permissao("manag
 
 
 @router.patch("/canais/{channel_id}")
-def update_canal(channel_id: str, body: ChannelPatch, _: dict = Depends(requer_permissao("managePlatform"))):
-    channel = platform_service.update_channel(channel_id, body.model_dump(exclude_none=True))
+def update_canal(channel_id: str, body: ChannelPatch, _: dict = Depends(requer_permissao("managePlatform")),
+                 context: dict = Depends(obter_company_context)):
+    channel = platform_service.update_channel(channel_id, body.model_dump(exclude_none=True),
+                                              workspace_id_from_context(context))
     if not channel:
         raise HTTPException(status_code=404, detail="Canal não encontrado")
     return channel
 
 
 @router.post("/canais/{channel_id}/toggle")
-def toggle_canal(channel_id: str, _: dict = Depends(requer_permissao("managePlatform"))):
-    channel = platform_service.toggle_channel(channel_id)
+def toggle_canal(channel_id: str, _: dict = Depends(requer_permissao("managePlatform")),
+                 context: dict = Depends(obter_company_context)):
+    channel = platform_service.toggle_channel(channel_id, workspace_id_from_context(context))
     if not channel:
         raise HTTPException(status_code=404, detail="Canal não encontrado")
     return channel

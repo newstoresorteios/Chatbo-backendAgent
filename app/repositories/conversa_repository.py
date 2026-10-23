@@ -7,6 +7,17 @@ from app.services.supabase_service import supabase
 
 class ConversaRepository:
 
+    def ingest_ycloud_atomic(self, *, channel_id: str, workspace_id: str, external_id: str,
+                             customer: str, customer_name: str, content: str,
+                             sent_at: str, human_request: bool) -> dict:
+        response = supabase.rpc("ycloud_ingest_inbound", {
+            "p_channel_id": channel_id, "p_workspace_id": workspace_id,
+            "p_external_id": external_id, "p_customer": customer,
+            "p_customer_name": customer_name, "p_content": content,
+            "p_sent_at": sent_at, "p_human_request": human_request,
+        }).execute()
+        return response.data or {}
+
     def listar(
         self,
         workspace_id: str | None = None,
@@ -91,6 +102,8 @@ class ConversaRepository:
                 query = apply_workspace_filter(query, workspace_id)
             if channel:
                 query = query.eq("channel", channel)
+            # A thread do número piloto pertence exclusivamente ao adaptador YCloud.
+            query = query.or_("provider.is.null,provider.neq.ycloud")
             rows = (query.execute().data) or []
             if rows:
                 return rows[0]

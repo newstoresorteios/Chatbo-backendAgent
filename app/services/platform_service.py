@@ -111,7 +111,7 @@ class PlatformService:
         raise
 
     # Canais
-    def get_channels(self) -> list[dict]:
+    def get_channels(self, workspace_id: str | None = None) -> list[dict]:
         self._ensure_tables()
         try:
             rows = self.repo.list_canais()
@@ -120,8 +120,12 @@ class PlatformService:
             self._handle_db_error(exc)
         result = []
         for row in rows:
+            if row.get("provider") == "ycloud" and str(row.get("workspace_id") or "") != str(workspace_id or ""):
+                continue
             item = _map_canal(row)
-            item["messagesToday"] = msg_counts.get(row.get("type"), 0)
+            item["messagesToday"] = (int(row.get("messages_today") or 0)
+                                     if row.get("provider") == "ycloud"
+                                     else msg_counts.get(row.get("type"), 0))
             result.append(item)
         return result
 
@@ -181,8 +185,14 @@ class PlatformService:
             self._handle_db_error(exc)
         return _map_canal(row)
 
-    def update_channel(self, channel_id: str, patch: dict) -> dict | None:
+    def update_channel(self, channel_id: str, patch: dict, workspace_id: str | None = None) -> dict | None:
         self._ensure_tables()
+        channel = self.repo.get_canal(channel_id)
+        if channel and channel.get("provider") == "ycloud":
+            if str(channel.get("workspace_id") or "") != str(workspace_id or ""):
+                raise HTTPException(404, "Canal não encontrado")
+            if patch.get("connected") is True or "phone" in patch:
+                raise HTTPException(409, "Valide o número pela conexão YCloud")
         db_patch = {}
         if "name" in patch:
             db_patch["name"] = patch["name"]
@@ -198,11 +208,16 @@ class PlatformService:
             self._handle_db_error(exc)
         return _map_canal(row) if row else None
 
-    def toggle_channel(self, channel_id: str) -> dict | None:
+    def toggle_channel(self, channel_id: str, workspace_id: str | None = None) -> dict | None:
         self._ensure_tables()
         canal = self.repo.get_canal(channel_id)
         if not canal:
             return None
+        if canal.get("provider") == "ycloud":
+            if workspace_id is not None and str(canal.get("workspace_id") or "") != str(workspace_id):
+                raise HTTPException(404, "Canal não encontrado")
+            if not canal.get("connected"):
+                raise HTTPException(409, "Valide o número pela conexão YCloud")
         try:
             row = self.repo.update_canal(channel_id, {
                 "connected": not bool(canal.get("connected")),

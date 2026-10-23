@@ -209,7 +209,7 @@ class _ConversaIndex:
             self.add(row)
 
     def add(self, row: dict | None) -> None:
-        if not row or row.get("merged_into"):
+        if not row or row.get("merged_into") or row.get("provider") == "ycloud":
             return
         for field in ("external_thread_id", "contact_phone"):
             value = str(row.get(field) or "").strip()
@@ -800,7 +800,7 @@ class AiConversasBridge:
 
     def sync_messages_for_conversa(self, conversa: dict, workspace_id: str | None) -> int:
         """Garante mensagens do NSAgent na conversa aberta (chamado no GET /mensagens)."""
-        if not workspace_id or not conversa:
+        if not workspace_id or not conversa or conversa.get("provider") == "ycloud":
             return 0
 
         conversa_id = str(conversa.get("id") or "")

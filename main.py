@@ -35,6 +35,7 @@ from app.routes.ai.crm_gaps import router as crm_gaps_router
 from app.routes.commercial_bi import router as commercial_bi_router
 from app.routes.agent_learning import router as agent_learning_router
 from app.routes.tray_customers import router as tray_customers_router
+from app.routes.ycloud import api_router as ycloud_api_router, webhook_router as ycloud_webhook_router
 
 validar_jwt_secret()
 
@@ -75,6 +76,7 @@ api.include_router(conversas_router, tags=["Conversas"])
 api.include_router(agent_router, tags=["Agent"])
 api.include_router(usuarios_router, tags=["Usuarios"])
 api.include_router(whatsapp_router, tags=["WhatsApp"])
+api.include_router(ycloud_api_router, tags=["YCloud"])
 api.include_router(settings_router, tags=["Settings"])
 api.include_router(system_router, tags=["System"])
 api.include_router(workspace_router, tags=["Workspace"])
@@ -95,6 +97,7 @@ api.include_router(etl_router, tags=["ETL"])
 
 app.include_router(api)
 app.include_router(webhooks_router, tags=["Webhooks"])
+app.include_router(ycloud_webhook_router, tags=["YCloud Webhooks"])
 
 
 @app.exception_handler(RequestValidationError)

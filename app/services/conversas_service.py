@@ -23,7 +23,7 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
     assigned_id = row.get("assigned_to")
     assigned_user = (users or {}).get(str(assigned_id)) if assigned_id else None
     handoff_requested = bool(row.get("handoff_requested_at")) and row.get("handoff_reason") in {
-        "customer_requested_human", "customer_accepted_handoff_offer",
+        "customer_requested_human", "customer_accepted_handoff_offer", "bot_unavailable",
     }
     status = row.get("status") or "active"
     if status == "waiting" and not handoff_requested:
@@ -48,6 +48,10 @@ def _map_conversa(row: dict, users: dict[str, dict] | None = None) -> dict:
         "handoffRequested": handoff_requested,
         "handoffRequestedAt": row.get("handoff_requested_at"),
         "handoffReason": row.get("handoff_reason"),
+        "provider": row.get("provider"),
+        "botState": ("human" if assigned_id else "waiting_human" if handoff_requested else "bot")
+        if row.get("provider") == "ycloud" else None,
+        "lastCustomerMessageAt": row.get("last_customer_message_at"),
         "unreadCount": int(row.get("unread_count") or 0),
         "channel": channel,
         "department": row.get("department"),
@@ -450,6 +454,18 @@ class ConversasService:
         if conversa.get("status") == "closed":
             raise HTTPException(status_code=400, detail="Conversa encerrada — reabra para enviar mensagens")
 
+        is_ycloud = conversa.get("provider") == "ycloud"
+        if is_ycloud:
+            from app.services.ycloud_service import ycloud_service
+
+            if actor_user_id and sender != "agent":
+                raise HTTPException(403, "Somente o atendente pode enviar pelo painel")
+            if sender == "ai" and (conversa.get("assigned_to") or conversa.get("bot_activated") is False
+                                   or conversa.get("status") == "waiting"):
+                raise HTTPException(409, "Bot pausado nesta conversa")
+            if sender in {"agent", "ai"}:
+                ycloud_service.ensure_text_window(conversa)
+
         if sender == "agent":
             assigned = str(conversa.get("assigned_to") or "")
             if not actor_user_id or assigned != str(actor_user_id):
@@ -468,6 +484,7 @@ class ConversasService:
 
         mensagem = self.mensagens.criar({
             "conversa_id": conversa_id,
+            **({"workspace_id": conversa.get("workspace_id")} if is_ycloud else {}),
             "content": outbound_text,
             "sender": sender,
             "status": "sending" if sender in {"agent", "ai"} else "sent",
@@ -477,8 +494,9 @@ class ConversasService:
         conv_patch = {
             "last_message": outbound_text,
             "last_message_at": datetime.utcnow().isoformat(),
-            "unread_count": 0,
         }
+        if not (is_ycloud and sender == "ai"):
+            conv_patch["unread_count"] = 0
         if sender == "agent":
             # Garante que o NSAgent continue pausado enquanto o humano atende.
             conv_patch["bot_activated"] = False
@@ -495,10 +513,29 @@ class ConversasService:
             from app.services.meta_instagram_outbound import is_meta_instagram
             from app.services.xnamai_outbound_service import xnamai_outbound_service
 
-            inbound = brevo_outbound_service._lookup_inbound(conversa) or {}
-            if is_meta_instagram(conversa, inbound):
+            if is_ycloud:
+                # Releia o estado após gerar a resposta: um atendente pode ter assumido
+                # a conversa enquanto a IA trabalhava.
+                if sender == "ai":
+                    current = self.conversas.obter(conversa_id, workspace_id=workspace_id)
+                    if current and (current.get("assigned_to") or current.get("bot_activated") is False
+                                    or current.get("status") != "active"):
+                        self.mensagens.atualizar(str(mensagem["id"]), {
+                            "status": "failed", "provider_status": "failed",
+                        })
+                        raise HTTPException(409, "Bot pausado nesta conversa")
+                try:
+                    delivery = ycloud_service.send_for_conversation(conversa, outbound_text)
+                except HTTPException:
+                    self.mensagens.atualizar(str(mensagem["id"]), {
+                        "status": "failed", "provider_status": "failed",
+                    })
+                    raise
+            else:
+                inbound = brevo_outbound_service._lookup_inbound(conversa) or {}
+            if not is_ycloud and is_meta_instagram(conversa, inbound):
                 delivery = enviar_meta(conversa, outbound_text, inbound)
-            elif xnamai_outbound_service.is_workspace(conversa.get("workspace_id") or workspace_id):
+            elif not is_ycloud and xnamai_outbound_service.is_workspace(conversa.get("workspace_id") or workspace_id):
                 # Separação estrita: WhatsApp XNamai sempre sai pelo runtime
                 # YCloud. Nunca fazemos fallback para a Brevo da NS.
                 delivery = xnamai_outbound_service.enviar_para_conversa(
@@ -506,7 +543,7 @@ class ConversasService:
                     outbound_text,
                     correlation_id=str(mensagem.get("id") or "") or None,
                 )
-            elif not brevo_outbound_service.configurado():
+            elif not is_ycloud and not brevo_outbound_service.configurado():
                 delivery = {
                     "sent": False,
                     "reason": (
@@ -516,18 +553,25 @@ class ConversasService:
                     ),
                     "brevoStatus": brevo_outbound_service.status(),
                 }
-            else:
+            elif not is_ycloud:
                 delivery = brevo_outbound_service.enviar_para_conversa(conversa, outbound_text)
                 delivery["brevoStatus"] = brevo_outbound_service.status()
 
             if mensagem.get("id"):
-                updated_message = self.mensagens.atualizar(
-                    str(mensagem["id"]),
-                    {
-                        "status": "sent" if delivery.get("sent") else "failed",
-                        "provider_status": "sent" if delivery.get("sent") else "failed",
-                    },
-                )
+                if is_ycloud and delivery.get("sent") and delivery.get("externalId"):
+                    updated_message = self.mensagens.attach_ycloud_outbound(
+                        str(mensagem["id"]), delivery["externalId"],
+                        str(conversa["workspace_id"]),
+                    )
+                else:
+                    updated_message = self.mensagens.atualizar(
+                        str(mensagem["id"]),
+                        {
+                            "status": "sent" if delivery.get("sent") else "failed",
+                            "provider_status": "sent" if delivery.get("sent") else "failed",
+                            **({"external_id": delivery["externalId"]} if delivery.get("externalId") else {}),
+                        },
+                    )
                 if updated_message:
                     mensagem = updated_message
 
@@ -647,6 +691,8 @@ class ConversasService:
         if not workspace_id:
             raise HTTPException(400, "Workspace obrigatório para anexos")
         conversa = self._obter_conversa(conversa_id, workspace_id)
+        if conversa.get("provider") == "ycloud":
+            raise HTTPException(409, "Envio de anexos YCloud ainda não disponível")
         if conversa.get("status") == "closed":
             raise HTTPException(400, "Reabra a conversa para enviar arquivos")
         if str(conversa.get("assigned_to") or "") != str(actor_user_id or ""):

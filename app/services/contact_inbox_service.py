@@ -152,6 +152,32 @@ class ContactInboxService:
                 mark_human_active(session, source="chatbo_contact_" + action)
         return map_contact(self.obter(conversation_id, workspace_id), self.sessions._users_index())
 
+    def devolver_ao_bot(self, conversation_id: str, workspace_id: str,
+                        actor_id: str, actor_name: str) -> dict:
+        group = self.obter(conversation_id, workspace_id)
+        current = group["current_session"]
+        if current.get("provider") != "ycloud":
+            raise HTTPException(409, "Esta ação está disponível somente no canal YCloud")
+        if str(current.get("assigned_to") or "") != str(actor_id):
+            raise HTTPException(403, "Somente o atendente responsável pode devolver ao bot")
+        if current.get("status") == "closed":
+            raise HTTPException(409, "Reabra a conversa antes de devolver ao bot")
+        updated = self.repo.atualizar_abertas(group, workspace_id, {
+            "assigned_to": None, "bot_activated": True, "status": "active",
+            "handoff_requested_at": None, "handoff_reason": None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, expected_assignee=actor_id)
+        if not updated:
+            raise HTTPException(409, "O atendimento já está encerrado")
+        self.sessions._registrar_evento(
+            str(group["active_session_id"]),
+            f"[Sistema] {actor_name} devolveu o atendimento ao bot.",
+            workspace_id=workspace_id,
+        )
+        for session in updated:
+            invalidate_conversa(str(session["id"]), workspace_id)
+        return map_contact(self.obter(conversation_id, workspace_id), self.sessions._users_index())
+
     def marcar_lida(self, conversation_id: str, workspace_id: str, user_id: str) -> tuple[dict, list[dict]]:
         group = self.obter(conversation_id, workspace_id)
         if str(group["current_session"].get("assigned_to") or "") != user_id:

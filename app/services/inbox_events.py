@@ -24,6 +24,7 @@ class InboxEvents:
     def __init__(self):
         self.boot = uuid4().hex
         self.revisions = OrderedDict()
+        self.last_revision = 0
         self.condition = asyncio.Condition()
         self.queue = asyncio.Queue(maxsize=512)
         self.task = None
@@ -59,7 +60,8 @@ class InboxEvents:
         if not workspace:
             return
         async with self.condition:
-            self.revisions[workspace] = time.monotonic_ns()
+            self.last_revision = max(time.monotonic_ns(), self.last_revision + 1)
+            self.revisions[workspace] = self.last_revision
             self.revisions.move_to_end(workspace)
             while len(self.revisions) > 2048:
                 self.revisions.popitem(last=False)
